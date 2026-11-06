@@ -18,4 +18,4 @@ jobs:
         working-directory: receiver
     steps:
       - uses: actions/checkout@v4
-      - run: cargo test
+      - run: cargo test --locked
