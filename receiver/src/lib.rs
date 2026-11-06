@@ -44,7 +44,10 @@ impl Packet {
 
     pub fn decode(bytes: &[u8]) -> Result<Self, BridgeError> {
         match bytes {
-            [1, high, low, value @ 0..=2] => Ok(Self::Key { code: u16::from_be_bytes([*high, *low]), value: *value }),
+            [1, high, low, value @ 0..=2] => Ok(Self::Key {
+                code: u16::from_be_bytes([*high, *low]),
+                value: *value,
+            }),
             [2] => Ok(Self::ReleaseAll),
             [3] => Ok(Self::Ping),
             _ => Err(BridgeError::InvalidPacket),
@@ -57,8 +60,12 @@ pub struct PairingSecret([u8; 32]);
 
 impl PairingSecret {
     pub fn parse(base64: &str) -> Result<Self, BridgeError> {
-        let decoded = STANDARD.decode(base64).map_err(|_| BridgeError::InvalidPairingSecret)?;
-        let key: [u8; 32] = decoded.try_into().map_err(|_| BridgeError::InvalidPairingSecret)?;
+        let decoded = STANDARD
+            .decode(base64)
+            .map_err(|_| BridgeError::InvalidPairingSecret)?;
+        let key: [u8; 32] = decoded
+            .try_into()
+            .map_err(|_| BridgeError::InvalidPairingSecret)?;
         Ok(Self(key))
     }
 
@@ -68,13 +75,21 @@ impl PairingSecret {
         Self(key)
     }
 
-    pub fn to_base64(&self) -> String { STANDARD.encode(self.0) }
+    pub fn to_base64(&self) -> String {
+        STANDARD.encode(self.0)
+    }
 }
 
-pub struct SecureFramer { cipher: ChaCha20Poly1305 }
+pub struct SecureFramer {
+    cipher: ChaCha20Poly1305,
+}
 
 impl SecureFramer {
-    pub fn new(secret: PairingSecret) -> Self { Self { cipher: ChaCha20Poly1305::new((&secret.0).into()) } }
+    pub fn new(secret: PairingSecret) -> Self {
+        Self {
+            cipher: ChaCha20Poly1305::new((&secret.0).into()),
+        }
+    }
 
     /// Returns a TCP frame with a 4-byte big-endian size followed by
     /// nonce (12 bytes), ciphertext, and tag (16 bytes), matching CryptoKit's combined box.
@@ -82,19 +97,27 @@ impl SecureFramer {
         let mut nonce = [0u8; 12];
         OsRng.fill_bytes(&mut nonce);
         let mut combined = nonce.to_vec();
-        let ciphertext = self.cipher.encrypt(Nonce::from_slice(&nonce), packet.encode().as_ref())
+        let ciphertext = self
+            .cipher
+            .encrypt(Nonce::from_slice(&nonce), packet.encode().as_ref())
             .map_err(|_| BridgeError::Authentication)?;
         combined.extend(ciphertext);
-        if combined.len() > MAX_FRAME_SIZE { return Err(BridgeError::InvalidFrame); }
+        if combined.len() > MAX_FRAME_SIZE {
+            return Err(BridgeError::InvalidFrame);
+        }
         let mut frame = (combined.len() as u32).to_be_bytes().to_vec();
         frame.extend(combined);
         Ok(frame)
     }
 
     pub fn open(&self, combined: &[u8]) -> Result<Packet, BridgeError> {
-        if !(12 + 16..=MAX_FRAME_SIZE).contains(&combined.len()) { return Err(BridgeError::InvalidFrame); }
+        if !(12 + 16..=MAX_FRAME_SIZE).contains(&combined.len()) {
+            return Err(BridgeError::InvalidFrame);
+        }
         let (nonce, ciphertext) = combined.split_at(12);
-        let plaintext = self.cipher.decrypt(Nonce::from_slice(nonce), ciphertext)
+        let plaintext = self
+            .cipher
+            .decrypt(Nonce::from_slice(nonce), ciphertext)
             .map_err(|_| BridgeError::Authentication)?;
         Packet::decode(&plaintext)
     }
@@ -103,13 +126,19 @@ impl SecureFramer {
         let mut length = [0u8; 4];
         reader.read_exact(&mut length)?;
         let length = u32::from_be_bytes(length) as usize;
-        if length == 0 || length > MAX_FRAME_SIZE { return Err(BridgeError::InvalidFrame); }
+        if length == 0 || length > MAX_FRAME_SIZE {
+            return Err(BridgeError::InvalidFrame);
+        }
         let mut combined = vec![0; length];
         reader.read_exact(&mut combined)?;
         self.open(&combined)
     }
 
-    pub fn write_packet<W: Write>(&self, writer: &mut W, packet: &Packet) -> Result<(), BridgeError> {
+    pub fn write_packet<W: Write>(
+        &self,
+        writer: &mut W,
+        packet: &Packet,
+    ) -> Result<(), BridgeError> {
         writer.write_all(&self.seal(packet)?)?;
         writer.flush()?;
         Ok(())
@@ -120,13 +149,18 @@ impl SecureFramer {
 mod tests {
     use super::*;
 
-    fn secret() -> PairingSecret { PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap() }
+    fn secret() -> PairingSecret {
+        PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap()
+    }
 
     #[test]
     fn packet_round_trip() {
         let framer = SecureFramer::new(secret());
         let frame = framer.seal(&Packet::Key { code: 30, value: 1 }).unwrap();
-        assert_eq!(framer.open(&frame[4..]).unwrap(), Packet::Key { code: 30, value: 1 });
+        assert_eq!(
+            framer.open(&frame[4..]).unwrap(),
+            Packet::Key { code: 30, value: 1 }
+        );
     }
 
     #[test]
@@ -134,7 +168,10 @@ mod tests {
         let framer = SecureFramer::new(secret());
         let mut input = vec![0, 0, 0x20, 0x01];
         input.extend([0; 3]);
-        assert!(matches!(framer.read_packet(&mut input.as_slice()), Err(BridgeError::InvalidFrame)));
+        assert!(matches!(
+            framer.read_packet(&mut input.as_slice()),
+            Err(BridgeError::InvalidFrame)
+        ));
     }
 
     #[test]
@@ -143,6 +180,9 @@ mod tests {
         let mut frame = framer.seal(&Packet::Ping).unwrap();
         let last = frame.len() - 1;
         frame[last] ^= 1;
-        assert!(matches!(framer.open(&frame[4..]), Err(BridgeError::Authentication)));
+        assert!(matches!(
+            framer.open(&frame[4..]),
+            Err(BridgeError::Authentication)
+        ));
     }
 }
