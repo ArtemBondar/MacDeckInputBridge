@@ -70,6 +70,12 @@ sh scripts/build-macos-app.sh
 open .build/MacDeckInputBridge.app
 ```
 
+Grant **MacDeckInputBridge** Accessibility access only after building this app
+bundle; do not grant access to the `swift run` process. If macOS still prompts
+after a rebuild, quit the app, turn its **MacDeckInputBridge** switch off and
+back on once in **System Settings → Privacy & Security → Accessibility**, then
+reopen `.build/MacDeckInputBridge.app`.
+
 Use **Settings…** to enter the Steam Deck host, port, and pairing secret. The secret is stored in the Mac Keychain, not in preferences or logs. The menu-bar keyboard icon shows the current destination: outline for **LOCAL**, ellipsis while **CONNECTING**, and filled while input is being sent to the **Steam Deck**. The menu also exposes the same `Control + Shift + F12` toggle.
 
 ## Protocol and security model
