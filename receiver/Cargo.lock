@@ -1534,6 +1534,7 @@ dependencies = [
  "get_if_addrs",
  "hex",
  "hkdf",
+ "image",
  "libc",
  "rand",
  "serde",
