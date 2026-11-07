@@ -2,7 +2,7 @@
 
 An MVP keyboard bridge from a MacBook to a Steam Deck OLED running Desktop Mode. The macOS sender captures physical keyboard events through an active Quartz event tap; the SteamOS receiver injects Linux key events through `/dev/uinput`.
 
-It intentionally does not provide Bluetooth, a GUI, trackpad forwarding, typed-content logs, or persistence of typed content. It also does not claim to suppress macOS-reserved system shortcuts.
+It intentionally does not provide Bluetooth or trackpad forwarding, typed-content logs, or persistence of typed content. It also does not claim to suppress macOS-reserved system shortcuts.
 
 ## Pair and run
 
@@ -21,6 +21,20 @@ MAC_DECK_PAIRING_SECRET='paste-secret-here' \
   ./target/release/mac-deck-receiver serve --bind 0.0.0.0:4242
 ```
 
+### Steam Deck Desktop Mode app
+
+The native receiver app provides the receiver through a **Control** toggle and a **Settings** tab. It displays and copies the pairing secret, generates a replacement secret, and lists the Deck's local IPv4 addresses. Generating a replacement key first disables Mac input and tears down the virtual keyboard; enable it again only after updating the Mac sender with the new key.
+
+Build both binaries together so the app can launch its CLI receiver sibling:
+
+```sh
+cd receiver
+cargo build --release --locked --features desktop-ui --bins
+./target/release/mac-deck-receiver-ui
+```
+
+The app stores only its listen address and pairing secret in `$XDG_CONFIG_HOME/mac-deck-input-bridge/receiver.toml` (or `~/.config/...`), with owner-only permissions. It never records forwarded key events or typed content. The receiver still needs the non-root `/dev/uinput` setup described in [`docs/steamos-setup.md`](docs/steamos-setup.md).
+
 Build and run the sender on macOS:
 
 ```sh
@@ -29,6 +43,16 @@ swift build
 ```
 
 The sender requests Accessibility permission. With the sender running, `Control + Shift + F12` starts connecting. Input remains local while connecting. Once authenticated, the same hotkey returns immediately to LOCAL mode and releases every remotely held key. On some MacBooks, use `Fn + Control + Shift + F12`.
+
+### macOS menu-bar app
+
+For a native macOS interface, run:
+
+```sh
+swift run mac-deck-menu-bar
+```
+
+Use **Settings…** to enter the Steam Deck host, port, and pairing secret. The secret is stored in the Mac Keychain, not in preferences or logs. The menu-bar keyboard icon shows the current destination: outline for **LOCAL**, ellipsis while **CONNECTING**, and filled while input is being sent to the **Steam Deck**. The menu also exposes the same `Control + Shift + F12` toggle.
 
 ## Protocol and security model
 
@@ -40,7 +64,7 @@ Pairing is explicit: generate a secret on the receiver, transfer it out-of-band,
 
 ```sh
 swift test
-(cd receiver && cargo test)
+(cd receiver && cargo test --locked --features desktop-ui)
 ```
 
 Run the physical-device checklist before relying on the bridge: [`docs/manual-verification.md`](docs/manual-verification.md).
