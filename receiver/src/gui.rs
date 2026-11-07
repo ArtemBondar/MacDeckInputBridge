@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const APP_NAME: &str = "MacDeckInputBridge Receiver";
+const APP_NAME: &str = "MacDeck";
 const CONFIG_DIRECTORY: &str = "mac-deck-input-bridge";
 const CONFIG_FILE: &str = "receiver.toml";
 
