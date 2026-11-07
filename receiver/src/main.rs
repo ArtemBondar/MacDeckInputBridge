@@ -301,19 +301,25 @@ fn automatic_layout_index(
     configured_layouts: &[ConfiguredLayout],
 ) -> Option<u8> {
     let source_name = mac_input_source.rsplit('.').next()?;
-    let normalized_source = normalize_layout_name(source_name);
-    if normalized_source.is_empty() {
+    let source_terms = layout_match_terms(source_name);
+    if source_terms.is_empty() {
         return None;
     }
     let candidates: Vec<_> = configured_layouts
         .iter()
         .filter(|layout| {
-            normalize_layout_name(&layout.xkb_code) == normalized_source
-                || normalize_layout_name(&layout.description) == normalized_source
-                || layout
-                    .description
-                    .split(|character: char| !character.is_alphanumeric())
-                    .any(|word| normalize_layout_name(word) == normalized_source)
+            let mut layout_terms = layout_match_terms(&layout.xkb_code);
+            layout_terms.extend(layout_match_terms(&layout.description));
+            source_terms.iter().any(|source_term| {
+                // A Mac source ID often adds a hardware or variant suffix,
+                // for example `Ukrainian-PC`. Match its meaningful pieces to
+                // the configured XKB code/description without enumerating
+                // languages. Multiple candidate layouts remain intentionally
+                // ambiguous and therefore do not trigger a switch.
+                layout_terms
+                    .iter()
+                    .any(|layout_term| layout_term == source_term)
+            })
         })
         .map(|layout| layout.index)
         .collect();
@@ -322,6 +328,21 @@ fn automatic_layout_index(
     } else {
         None
     }
+}
+
+fn layout_match_terms(value: &str) -> Vec<String> {
+    let whole = normalize_layout_name(value);
+    let mut terms = Vec::new();
+    if !whole.is_empty() {
+        terms.push(whole);
+    }
+    for word in value.split(|character: char| !character.is_alphanumeric()) {
+        let normalized = normalize_layout_name(word);
+        if !normalized.is_empty() && !terms.contains(&normalized) {
+            terms.push(normalized);
+        }
+    }
+    terms
 }
 
 fn normalize_layout_name(value: &str) -> String {
@@ -820,6 +841,10 @@ mod receiver_tests {
         );
         assert_eq!(
             automatic_layout_index("com.apple.keylayout.Ukrainian", &layouts),
+            Some(1)
+        );
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.Ukrainian-PC", &layouts),
             Some(1)
         );
         assert_eq!(
