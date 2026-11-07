@@ -44,7 +44,9 @@ absolute path to its UI binary (so Plasma does not depend on its `PATH`), and
 installs the MacDeck icon. Run it again after building a newer version. It also
 asks Plasma to refresh its application cache; if the app is not visible right
 away, log out and back in. A full checkout installs the exact macOS app icon;
-source-only archives use the matching Steam Deck silhouette instead. The same
+source-only archives use the matching Steam Deck silhouette instead. The
+installer also registers the asset through `xdg-icon-resource` for SteamOS
+Plasma versions that do not immediately discover user theme files. The same
 Dock PNG is embedded in the receiver window and its Wayland app ID matches the
 launcher, so the Plasma task manager groups it with the correct icon.
 
