@@ -195,26 +195,31 @@ final class SettingsWindowControllerTests: XCTestCase {
             XCTAssertGreaterThan(image.size.height, 0)
         }
 
-        XCTAssertNotEqual(
+        XCTAssertEqual(
             MenuBarDeckIcon.image(for: .local).tiffRepresentation,
             MenuBarDeckIcon.image(for: .connecting).tiffRepresentation,
-            "CONNECTING must render a visible in-progress state."
+            "The first CONNECTING frame intentionally starts with zero dots."
         )
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .local).tiffRepresentation,
             MenuBarDeckIcon.image(for: .remote).tiffRepresentation,
             "REMOTE must render a visibly captured keyboard state."
         )
-        XCTAssertEqual(MenuBarDeckIcon.connectingFrameCount, 3)
+        XCTAssertEqual(MenuBarDeckIcon.connectingFrameCount, 4)
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 0).tiffRepresentation,
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 1).tiffRepresentation,
-            "Connecting animation frames must visibly advance."
+            "Connecting animation must begin with an empty display, then show one dot."
         )
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 1).tiffRepresentation,
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 2).tiffRepresentation,
             "Connecting animation must progress through all three dots."
+        )
+        XCTAssertNotEqual(
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 2).tiffRepresentation,
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 3).tiffRepresentation,
+            "Connecting animation must visibly reach three dots."
         )
     }
 
