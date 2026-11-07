@@ -23,6 +23,10 @@ const CONFIG_FILE: &str = "receiver.toml";
 struct ReceiverSettings {
     bind: String,
     pairing_secret: String,
+    #[serde(default)]
+    sync_layout_from_mac: bool,
+    #[serde(default)]
+    layout_mappings: String,
 }
 
 impl Default for ReceiverSettings {
@@ -30,6 +34,8 @@ impl Default for ReceiverSettings {
         Self {
             bind: "0.0.0.0:4242".to_owned(),
             pairing_secret: PairingSecret::generate().to_base64(),
+            sync_layout_from_mac: false,
+            layout_mappings: String::new(),
         }
     }
 }
@@ -44,7 +50,11 @@ impl ReceiverSettings {
             .map(|_| ())
             .map_err(|_| {
                 "Bind address must be an IP address and port, for example 0.0.0.0:4242".to_owned()
-            })
+            })?;
+        if self.sync_layout_from_mac {
+            parse_layout_mappings(&self.layout_mappings)?;
+        }
+        Ok(())
     }
 }
 
@@ -85,6 +95,7 @@ impl ReceiverSupervisor for ReceiverProcess {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .args(layout_sync_arguments(settings)?)
             .spawn()
             .map_err(|error| format!("Could not start receiver: {error}"))?;
         self.child = Some(child);
@@ -307,6 +318,22 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             }
         });
         ui.add_space(16.0);
+        ui.checkbox(
+            &mut self.settings.sync_layout_from_mac,
+            "Sync active layout from Mac",
+        );
+        ui.small("When enabled, the Mac chooses the active Deck layout before it sends keys.");
+        if self.settings.sync_layout_from_mac {
+            ui.add_space(6.0);
+            ui.label("Layout mappings (one per line: Mac input-source ID = Deck layout number)");
+            ui.add(
+                egui::TextEdit::multiline(&mut self.settings.layout_mappings)
+                    .desired_rows(4)
+                    .hint_text("com.apple.keylayout.US = 0\ncom.apple.keylayout.Ukrainian = 1"),
+            );
+            ui.small("Deck layout numbers start at 0 and follow their order in Plasma Settings > Keyboard > Layouts.");
+        }
+        ui.add_space(16.0);
         ui.heading("Steam Deck IP addresses");
         for address in &self.ip_addresses {
             ui.monospace(address.to_string());
@@ -369,6 +396,59 @@ fn receiver_executable_beside(current: &Path) -> Result<PathBuf, String> {
                 .to_owned(),
         )
     }
+}
+
+fn layout_sync_arguments(settings: &ReceiverSettings) -> Result<Vec<String>, String> {
+    if !settings.sync_layout_from_mac {
+        return Ok(Vec::new());
+    }
+    let mappings = parse_layout_mappings(&settings.layout_mappings)?;
+    let mut arguments = vec!["--sync-layout-from-mac".to_owned()];
+    for mapping in mappings {
+        arguments.push("--layout-mapping".to_owned());
+        arguments.push(mapping);
+    }
+    Ok(arguments)
+}
+
+fn parse_layout_mappings(text: &str) -> Result<Vec<String>, String> {
+    let mut mappings = Vec::new();
+    for (line_number, raw_line) in text.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((source, layout_index)) = line.split_once('=') else {
+            return Err(format!(
+                "Layout mapping on line {} must use source ID = Deck layout number.",
+                line_number + 1
+            ));
+        };
+        let source = source.trim();
+        let layout_index = layout_index.trim();
+        let valid_source = !source.is_empty()
+            && source.len() <= 128
+            && source
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+        if !valid_source {
+            return Err(format!(
+                "Layout mapping on line {} has an invalid Mac input-source ID.",
+                line_number + 1
+            ));
+        }
+        let index = layout_index.parse::<u8>().map_err(|_| {
+            format!(
+                "Layout mapping on line {} needs a Deck layout number from 0 to 255.",
+                line_number + 1
+            )
+        })?;
+        mappings.push(format!("{source}={index}"));
+    }
+    if mappings.is_empty() {
+        return Err("Add at least one layout mapping before enabling Mac layout sync.".to_owned());
+    }
+    Ok(mappings)
 }
 
 fn settings_path() -> PathBuf {
@@ -525,6 +605,31 @@ mod tests {
     }
 
     #[test]
+    fn layout_mappings_support_any_safe_mac_source_identifier() {
+        assert_eq!(
+            parse_layout_mappings("com.apple.keylayout.British = 3\norg.example.Custom_42 = 12")
+                .unwrap(),
+            [
+                "com.apple.keylayout.British=3".to_owned(),
+                "org.example.Custom_42=12".to_owned()
+            ]
+        );
+        assert!(parse_layout_mappings("com.apple.keylayout.US = not-a-number").is_err());
+        assert!(parse_layout_mappings("not a mapping").is_err());
+    }
+
+    #[test]
+    fn enabled_layout_sync_requires_a_mapping_but_disabled_sync_does_not() {
+        let mut settings = ReceiverSettings {
+            sync_layout_from_mac: true,
+            ..ReceiverSettings::default()
+        };
+        assert!(settings.validates().is_err());
+        settings.layout_mappings = "com.apple.keylayout.US = 0".to_owned();
+        assert!(settings.validates().is_ok());
+    }
+
+    #[test]
     fn bundled_dock_icon_is_a_decodable_png() {
         assert!(eframe::icon_data::from_png_bytes(include_bytes!(
             "../../assets/MacDeckInputBridgeIcon.png"
@@ -537,6 +642,7 @@ mod tests {
         let settings = ReceiverSettings {
             bind: "not an address".to_owned(),
             pairing_secret: "not base64".to_owned(),
+            ..ReceiverSettings::default()
         };
         assert!(settings.validates().is_err());
     }
@@ -549,6 +655,7 @@ mod tests {
             ReceiverSettings {
                 bind: "invalid address".to_owned(),
                 pairing_secret: "not base64".to_owned(),
+                ..ReceiverSettings::default()
             },
             path.clone(),
             FakeReceiverProcess::default(),
@@ -723,6 +830,7 @@ mod tests {
             ReceiverSettings {
                 bind: "127.0.0.1:4343".to_owned(),
                 pairing_secret: PairingSecret::generate().to_base64(),
+                ..ReceiverSettings::default()
             },
             path.clone(),
             FakeReceiverProcess {
@@ -796,6 +904,7 @@ mod tests {
             ReceiverSettings {
                 bind: "0.0.0.0:4242".to_owned(),
                 pairing_secret: old_secret.clone(),
+                ..ReceiverSettings::default()
             },
             path.clone(),
             FakeReceiverProcess {
@@ -824,6 +933,7 @@ mod tests {
             ReceiverSettings {
                 bind: "0.0.0.0:4242".to_owned(),
                 pairing_secret: old_secret.clone(),
+                ..ReceiverSettings::default()
             },
             stop_error_directory.join(CONFIG_FILE),
             FakeReceiverProcess {
@@ -847,6 +957,7 @@ mod tests {
             ReceiverSettings {
                 bind: "0.0.0.0:4242".to_owned(),
                 pairing_secret: old_secret.clone(),
+                ..ReceiverSettings::default()
             },
             parent_file.join(CONFIG_FILE),
             FakeReceiverProcess {
@@ -874,6 +985,7 @@ mod tests {
             ReceiverSettings {
                 bind: "0.0.0.0:4242".to_owned(),
                 pairing_secret: secret.clone(),
+                ..ReceiverSettings::default()
             },
             directory.join(CONFIG_FILE),
             FakeReceiverProcess::default(),
