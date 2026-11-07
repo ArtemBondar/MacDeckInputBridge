@@ -99,8 +99,14 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertNil(BridgePacket(encoded: Data()))
         XCTAssertNil(BridgePacket(encoded: Data([1, 0, 30, 3])))
         XCTAssertNil(BridgePacket(encoded: Data([9])))
+        XCTAssertNil(BridgePacket(encoded: Data([7, 2, 0x75])))
         XCTAssertEqual(BridgePacket(encoded: Data([4])), .clientReady)
         XCTAssertEqual(BridgePacket(encoded: Data([5])), .serverReady)
+        XCTAssertEqual(BridgePacket(encoded: Data([6])), .serverReadyWithLayoutSync)
+        XCTAssertEqual(
+            BridgePacket(encoded: Data([7, 22] + Array("com.apple.keylayout.US".utf8))),
+            .keyboardLayout(identifier: "com.apple.keylayout.US")
+        )
     }
 
     func testSettingsStorePersistsEndpointAndKeychainSecret() throws {
