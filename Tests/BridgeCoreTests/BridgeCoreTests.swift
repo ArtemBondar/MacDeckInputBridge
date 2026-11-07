@@ -32,52 +32,75 @@ final class BridgeCoreTests: XCTestCase {
         return machine
     }
 
-    func testPacketRoundTripThroughAuthenticatedFrame() throws {
-        let framer = SecureFramer(pairing: pairing)
-        let frame = try framer.seal(.key(code: 30, value: 1))
+    func testSessionRoundTripThroughAuthenticatedFrame() throws {
+        let challenge = Data(repeating: 7, count: ServerHello.challengeLength)
+        var sender = try SessionFramer(pairing: pairing, challenge: challenge)
+        var receiver = try SessionFramer(pairing: pairing, challenge: challenge)
+        let frame = try sender.seal(.clientReady)
         var decoder = FrameDecoder()
         let encrypted = try XCTUnwrap(decoder.append(frame).first)
-        XCTAssertEqual(try framer.open(combined: encrypted), .key(code: 30, value: 1))
+        XCTAssertEqual(try receiver.open(combined: encrypted), .clientReady)
     }
 
-    func testDecryptsRustChaChaPolyFixture() throws {
-        let combined = Data(hexadecimal: "0000000000000000000000009e07f9bf24604abcc6cbb670b4ca01b0ca60a51d")
-        XCTAssertEqual(
-            try SecureFramer(pairing: pairing).open(combined: combined),
-            .key(code: 30, value: 1)
-        )
+    func testServerHelloIsStrictlyVersionedAndLengthFramed() throws {
+        let hello = try ServerHello(challenge: Data(repeating: 9, count: ServerHello.challengeLength))
+        var decoder = FrameDecoder()
+        let frames = try decoder.append(SessionFramer.lengthFrame(hello.encoded()))
+        XCTAssertEqual(try ServerHello(encoded: try XCTUnwrap(frames.first)), hello)
+        XCTAssertThrowsError(try ServerHello(encoded: Data([0x10, 2]) + Data(repeating: 0, count: 32)))
     }
 
     func testDecoderHandlesFragmentedAndCoalescedFrames() throws {
-        let framer = SecureFramer(pairing: pairing)
-        let first = try framer.seal(.ping)
-        let second = try framer.seal(.releaseAll)
+        let challenge = Data(repeating: 8, count: ServerHello.challengeLength)
+        var sender = try SessionFramer(pairing: pairing, challenge: challenge)
+        var receiver = try SessionFramer(pairing: pairing, challenge: challenge)
+        let first = try sender.seal(.clientReady)
+        let second = try sender.seal(.ping)
         var decoder = FrameDecoder()
         XCTAssertTrue(try decoder.append(first.prefix(2)).isEmpty)
         let frames = try decoder.append(first.dropFirst(2) + second)
         XCTAssertEqual(frames.count, 2)
-        XCTAssertEqual(try framer.open(combined: frames[0]), .ping)
-        XCTAssertEqual(try framer.open(combined: frames[1]), .releaseAll)
+        XCTAssertEqual(try receiver.open(combined: frames[0]), .clientReady)
+        XCTAssertEqual(try receiver.open(combined: frames[1]), .ping)
     }
 
     func testFramingWorksAtEveryTCPFragmentBoundary() throws {
-        let framer = SecureFramer(pairing: pairing)
-        let frame = try framer.seal(.key(code: 30, value: 1))
+        let challenge = Data(repeating: 6, count: ServerHello.challengeLength)
+        var sender = try SessionFramer(pairing: pairing, challenge: challenge)
+        let frame = try sender.seal(.clientReady)
         for splitIndex in 0...frame.count {
+            var receiver = try SessionFramer(pairing: pairing, challenge: challenge)
             var decoder = FrameDecoder()
             let firstFrames = try decoder.append(frame.prefix(splitIndex))
             let secondFrames = try decoder.append(frame.dropFirst(splitIndex))
             let frames = firstFrames + secondFrames
             let encrypted = try XCTUnwrap(frames.first)
             XCTAssertEqual(frames.count, 1)
-            XCTAssertEqual(try framer.open(combined: encrypted), .key(code: 30, value: 1))
+            XCTAssertEqual(try receiver.open(combined: encrypted), .clientReady)
         }
+    }
+
+    func testSessionRejectsReplayedAndOutOfOrderFrames() throws {
+        let challenge = Data(repeating: 5, count: ServerHello.challengeLength)
+        var sender = try SessionFramer(pairing: pairing, challenge: challenge)
+        var receiver = try SessionFramer(pairing: pairing, challenge: challenge)
+        let ready = try sender.seal(.clientReady)
+        let key = try sender.seal(.key(code: 30, value: 1))
+        var decoder = FrameDecoder()
+        let frames = try decoder.append(ready + key)
+        XCTAssertEqual(try receiver.open(combined: frames[0]), .clientReady)
+        XCTAssertThrowsError(try receiver.open(combined: frames[0])) { error in
+            XCTAssertEqual(error as? ProtocolError, .unexpectedSequence)
+        }
+        XCTAssertEqual(try receiver.open(combined: frames[1]), .key(code: 30, value: 1))
     }
 
     func testInvalidPacketsAreRejected() {
         XCTAssertNil(BridgePacket(encoded: Data()))
         XCTAssertNil(BridgePacket(encoded: Data([1, 0, 30, 3])))
         XCTAssertNil(BridgePacket(encoded: Data([9])))
+        XCTAssertEqual(BridgePacket(encoded: Data([4])), .clientReady)
+        XCTAssertEqual(BridgePacket(encoded: Data([5])), .serverReady)
     }
 
     func testSettingsStorePersistsEndpointAndKeychainSecret() throws {
@@ -101,6 +124,15 @@ final class BridgeCoreTests: XCTestCase {
         }
         let store = InMemoryPairingSecretStore()
         XCTAssertThrowsError(try store.saveSecret("not-a-pairing-secret"))
+    }
+
+    func testSettingsStoreFallsBackWhenPersistedPortIsCorrupt() throws {
+        let suite = "MacDeckInputBridgeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(99_999, forKey: "deckPort")
+        let store = BridgeSettingsStore(defaults: defaults, secretStore: InMemoryPairingSecretStore())
+        XCTAssertEqual(store.loadSettings().port, 4242)
     }
 
     func testPhysicalKeyMapping() {
@@ -158,6 +190,7 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(machine.mode, .connecting)
         XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 0)), [.passThrough])
         machine.connectionReady()
+        XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyUp, keyCode: 0)), [.passThrough])
         XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 0)), [.suppress(.key(code: 30, value: 1))])
         XCTAssertEqual(machine.handle(hotkey), [.passThrough, .releaseAndDisconnect])
         XCTAssertEqual(machine.mode, .local)
@@ -199,6 +232,18 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.control, .shift])), [.passThrough, .beginConnection])
         machine.connectionReady()
         XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyUp, keyCode: 59)), [.passThrough])
+    }
+
+    func testOrdinaryKeyPressedLocallyBeforeRemoteKeepsItsKeyUpLocal() {
+        var machine = InputStateMachine()
+        XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 0)), [.passThrough])
+        _ = machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.control, .shift]))
+        machine.connectionReady()
+        XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyUp, keyCode: 0)), [.passThrough])
+        XCTAssertEqual(
+            machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 0)),
+            [.suppress(.key(code: 30, value: 1))]
+        )
     }
 
     func testHotkeyShiftIsForwardedAfterItsLocalRelease() {
