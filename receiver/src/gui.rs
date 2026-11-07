@@ -436,13 +436,22 @@ fn main() -> eframe::Result<()> {
     // icon.
     let icon = eframe::icon_data::from_png_bytes(include_bytes!(
         "../../assets/MacDeckInputBridgeIcon.png"
-    ))
-    .expect("the bundled MacDeck Dock icon must be a valid PNG");
+    ));
+    let viewport = egui::ViewportBuilder::default()
+        .with_inner_size([500.0, 360.0])
+        .with_app_id(APP_ID);
+    let viewport = match icon {
+        Ok(icon) => viewport.with_icon(Arc::new(icon)),
+        Err(error) => {
+            // The launcher still supplies the icon through its desktop entry.
+            // Never prevent the receiver from starting merely because a future
+            // packaging change omits an image decoder.
+            eprintln!("Could not decode the bundled MacDeck icon: {error}");
+            viewport
+        }
+    };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([500.0, 360.0])
-            .with_app_id(APP_ID)
-            .with_icon(Arc::new(icon)),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
@@ -492,6 +501,14 @@ mod tests {
     #[test]
     fn generated_default_settings_are_valid() {
         ReceiverSettings::default().validates().unwrap();
+    }
+
+    #[test]
+    fn bundled_dock_icon_is_a_decodable_png() {
+        assert!(eframe::icon_data::from_png_bytes(include_bytes!(
+            "../../assets/MacDeckInputBridgeIcon.png"
+        ))
+        .is_ok());
     }
 
     #[test]
