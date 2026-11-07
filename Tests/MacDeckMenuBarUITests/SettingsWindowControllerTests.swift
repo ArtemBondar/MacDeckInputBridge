@@ -61,6 +61,78 @@ final class SettingsWindowControllerTests: XCTestCase {
         ))
     }
 
+    func testSaveValidationErrorKeepsWindowOpenAndVisible() throws {
+        let controller = SettingsWindowController()
+        controller.show(draft: SettingsDraft(host: "", port: "4242", pairingSecret: "")) { _ in
+            "Enter a Steam Deck host."
+        }
+        let window = try XCTUnwrap(controller.window)
+        drainMainQueue()
+
+        controller.saveButton.performClick(nil)
+        XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(controller.messageLabel.stringValue, "Enter a Steam Deck host.")
+        window.close()
+    }
+
+    func testReopeningSettingsReplacesAllFieldsAndClearsPreviousError() throws {
+        let controller = SettingsWindowController()
+        controller.show(draft: SettingsDraft(host: "", port: "0", pairingSecret: "old")) { _ in "Invalid port." }
+        let window = try XCTUnwrap(controller.window)
+        drainMainQueue()
+        controller.saveButton.performClick(nil)
+        XCTAssertEqual(controller.messageLabel.stringValue, "Invalid port.")
+
+        controller.show(draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "new")) { _ in nil }
+        drainMainQueue()
+        XCTAssertEqual(controller.hostField.stringValue, "deck.local")
+        XCTAssertEqual(controller.portField.stringValue, "4242")
+        XCTAssertEqual(controller.pairingSecretField.stringValue, "new")
+        XCTAssertEqual(controller.messageLabel.stringValue, "")
+        window.close()
+    }
+
+    func testLongNoticeWrapsInsideFixedWidthSettingsWindow() throws {
+        let controller = SettingsWindowController()
+        let notice = "Accessibility permission is required. Enable the app in System Settings, then relaunch MacDeckInputBridge before sending the keyboard to Steam Deck."
+        controller.show(
+            draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "secret"),
+            notice: notice
+        ) { _ in nil }
+        let window = try XCTUnwrap(controller.window)
+        drainMainQueue()
+
+        XCTAssertEqual(window.frame.width, 560, accuracy: 1)
+        XCTAssertEqual(controller.messageLabel.stringValue, notice)
+        XCTAssertEqual(controller.messageLabel.lineBreakMode, .byWordWrapping)
+        XCTAssertTrue(controller.messageLabel.cell?.wraps ?? false)
+        window.close()
+    }
+
+    func testEveryMenuBarPrimaryActionStateHasAnExplicitLabel() {
+        XCTAssertEqual(MenuBarPresentation.attentionTitle, "Needs attention — open Settings…")
+        XCTAssertEqual(
+            MenuBarPresentation.primaryAction(status: .local, host: "", pairingSecret: "secret"),
+            .configure
+        )
+        XCTAssertEqual(
+            MenuBarPresentation.primaryAction(status: .remote, host: "deck", pairingSecret: ""),
+            .configure
+        )
+        XCTAssertEqual(
+            MenuBarPresentation.primaryAction(status: .local, host: "deck", pairingSecret: "secret"),
+            .send
+        )
+        XCTAssertEqual(
+            MenuBarPresentation.primaryAction(status: .connecting, host: "deck", pairingSecret: "secret"),
+            .cancelConnection
+        )
+        XCTAssertEqual(
+            MenuBarPresentation.primaryAction(status: .remote, host: "deck", pairingSecret: "secret"),
+            .returnToMac
+        )
+    }
+
     private func drainMainQueue() {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
