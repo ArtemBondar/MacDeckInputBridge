@@ -54,8 +54,10 @@ The app stores only its listen address and pairing secret in `$XDG_CONFIG_HOME/m
 
 #### Optional Mac-first layout synchronization
 
-In the Deck app’s **Settings** tab, enable **Sync active layout from Mac** and
-add one mapping per input source, for example:
+In the Deck app’s **Settings** tab, enable **Sync active layout from Mac**. The
+receiver automatically matches the active Mac source ID against the configured
+Plasma/XKB layouts and changes the Deck only when the match is unambiguous.
+Optional manual overrides use one mapping per input source, for example:
 
 ```text
 com.apple.keylayout.US = 0
@@ -64,10 +66,10 @@ com.apple.keylayout.Ukrainian = 1
 
 The number is the zero-based order of that layout in **Plasma Settings →
 Keyboard → Layouts**. This is deliberately data-driven rather than limited to a
-small language list: add mappings for any macOS input source and any Deck
-layout. The macOS app shows the current source ID in its **Settings** window.
-When a source is not mapped or Plasma cannot switch it, physical-key forwarding
-continues using the Deck’s current layout.
+small language list: use an override only for a custom or ambiguous layout. The
+macOS app shows the current source ID in its **Settings** window. When a source
+cannot be matched or Plasma cannot switch it, physical-key forwarding continues
+using the Deck’s current layout.
 
 Build and run the sender on macOS:
 
