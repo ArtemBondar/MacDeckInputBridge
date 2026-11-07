@@ -31,6 +31,16 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertNil(KeyMapping.linuxCode(for: 999))
     }
 
+    func testTopNumberRowMapsByPhysicalKey() {
+        let expected: [UInt16: UInt16] = [
+            18: 2, 19: 3, 20: 4, 21: 5, 22: 7, 23: 6,
+            24: 13, 25: 10, 26: 8, 27: 12, 28: 9, 29: 11
+        ]
+        for (macKeyCode, linuxCode) in expected {
+            XCTAssertEqual(KeyMapping.linuxCode(for: macKeyCode), linuxCode, "macOS keycode \(macKeyCode)")
+        }
+    }
+
     func testConnectingNeverSuppressesAndRemoteToggleFailsSafe() {
         var machine = InputStateMachine()
         let hotkey = CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.control, .shift])
