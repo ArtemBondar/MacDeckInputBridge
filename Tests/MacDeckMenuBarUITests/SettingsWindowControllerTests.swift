@@ -11,6 +11,7 @@ final class SettingsWindowControllerTests: XCTestCase {
         drainMainQueue()
 
         XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(NSApp.activationPolicy(), .regular)
         XCTAssertTrue(controller.hostField.isEditable)
         XCTAssertTrue(controller.hostField.isSelectable)
         XCTAssertTrue(
@@ -23,6 +24,7 @@ final class SettingsWindowControllerTests: XCTestCase {
         editor.insertText("192.168.1.42", replacementRange: NSRange(location: 0, length: 0))
         XCTAssertEqual(controller.hostField.stringValue, "192.168.1.42")
         window.close()
+        XCTAssertEqual(NSApp.activationPolicy(), .accessory)
     }
 
     func testPairingFieldAcceptsPasteAndSaveUsesEnteredValues() throws {
