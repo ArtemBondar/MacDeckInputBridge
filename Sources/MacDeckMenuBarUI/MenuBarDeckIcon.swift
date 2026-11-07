@@ -4,7 +4,8 @@ import AppKit
 /// state signal: empty for LOCAL, dots for CONNECTING, and `ABC` only when the
 /// Steam Deck has captured the Mac keyboard in REMOTE mode.
 public enum MenuBarDeckIcon {
-    public static let connectingFrameCount = 3
+    /// Empty screen, then one, two, and three dots.
+    public static let connectingFrameCount = 4
 
     public static func image(for status: MenuBarStatus, connectingPhase: Int = 0) -> NSImage {
         let size = NSSize(width: 32, height: 20)
@@ -12,8 +13,8 @@ public enum MenuBarDeckIcon {
             NSColor.white.setFill()
             NSColor.white.setStroke()
 
-            let deck = NSBezierPath(roundedRect: NSRect(x: 1, y: 2, width: 30, height: 16), xRadius: 6, yRadius: 6)
-            deck.lineWidth = 1.6
+            let deck = NSBezierPath(roundedRect: NSRect(x: 1, y: 3, width: 30, height: 14), xRadius: 5.2, yRadius: 5.2)
+            deck.lineWidth = 1.25
             deck.stroke()
 
             let screen = NSRect(x: 8.8, y: 6.4, width: 14.4, height: 7.2)
@@ -24,7 +25,7 @@ public enum MenuBarDeckIcon {
             case .local:
                 break
             case .connecting:
-                let visibleDotCount = (connectingPhase % connectingFrameCount) + 1
+                let visibleDotCount = connectingPhase % connectingFrameCount
                 for x in [11.2, 15.0, 18.8].prefix(visibleDotCount) {
                     NSBezierPath(ovalIn: NSRect(x: x, y: 9.4, width: 1.7, height: 1.7)).fill()
                 }
@@ -41,10 +42,10 @@ public enum MenuBarDeckIcon {
                 )
             }
 
-            // Two large controls keep the Steam Deck silhouette legible without
-            // competing with the screen's connection status.
-            NSBezierPath(ovalIn: NSRect(x: 4.2, y: 8.0, width: 3.5, height: 3.5)).fill()
-            NSBezierPath(ovalIn: NSRect(x: 24.3, y: 8.0, width: 3.5, height: 3.5)).fill()
+            // The sticks sit halfway between the display and the outside of the
+            // thinner body, centered on the display's vertical axis.
+            NSBezierPath(ovalIn: NSRect(x: 4.9, y: 8.25, width: 3.5, height: 3.5)).fill()
+            NSBezierPath(ovalIn: NSRect(x: 23.6, y: 8.25, width: 3.5, height: 3.5)).fill()
             return true
         }
         image.isTemplate = true
