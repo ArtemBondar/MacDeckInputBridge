@@ -15,13 +15,15 @@ MacBook keyboard → Swift `CGEventTap` → authenticated encrypted TCP → Rust
 
 ## Protocol
 
-The stream framing is a four-byte big-endian bounded length followed by a ChaCha20-Poly1305 combined box: a fresh 12-byte nonce, ciphertext, and 16-byte tag. The packet plaintext is one of `Key(code, value)`, `ReleaseAll`, or `Ping`; values are 0 (up), 1 (down), and 2 (repeat). The 32-byte Base64 pairing secret is generated at the receiver and transferred out of band. It is the AEAD key, so every accepted packet is encrypted and authenticated before injection.
+The receiver first writes an unencrypted, length-framed `ServerHello(version, 32-byte challenge)`. Both peers derive a one-connection 32-byte AEAD key using HKDF-SHA256 with the pairing secret as input key material, the challenge as salt, and `MacDeckInputBridge/session/v1` as info. The sender must send encrypted `ClientReady` at sequence 0; the receiver returns encrypted `ServerReady` at sequence 0. Only after that confirmation may the sender enter REMOTE.
+
+Application records are a four-byte big-endian bounded length followed by a ChaCha20-Poly1305 combined box: a fresh 12-byte nonce, ciphertext, and 16-byte tag. Its authenticated plaintext begins with a strictly increasing big-endian `u64` sequence number, then `Key(code, value)`, `ReleaseAll`, or `Ping`; values are 0 (up), 1 (down), and 2 (repeat). The receiver rejects malformed, unauthenticated, duplicate, and out-of-order records before injection. The fresh session key prevents a captured record being replayed on another TCP connection.
 
 The sender maps physical macOS virtual key codes to Linux `KEY_*`/evdev codes; it does not derive, log, or persist typed Unicode content.
 
 ## Security and privileges
 
-Keyboard events can contain credentials. Keep the pairing secret confidential, use a trusted Wi-Fi network, and do not expose the receiver port to the Internet. The receiver accepts only frames authenticated with the pairing secret. Its process should run as an ordinary user with group access to `/dev/uinput`, rather than as root; see [SteamOS setup](steamos-setup.md).
+Keyboard events can contain credentials. Keep the pairing secret confidential, use a trusted Wi-Fi network, and do not expose the receiver port to the Internet. The receiver accepts only an authenticated ready exchange and in-order session records. Its process should run as an ordinary user with group access to `/dev/uinput`, rather than as root; see [SteamOS setup](steamos-setup.md).
 
 ## Acceptance
 
