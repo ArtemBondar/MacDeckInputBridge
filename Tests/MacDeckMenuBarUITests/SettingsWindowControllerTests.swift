@@ -4,6 +4,18 @@ import XCTest
 
 @MainActor
 final class SettingsWindowControllerTests: XCTestCase {
+    func testFirstSettingsPresentationCentersTheWindow() throws {
+        let controller = SettingsWindowController()
+        let window = try XCTUnwrap(controller.window)
+        let originalOrigin = window.frame.origin
+
+        controller.show(draft: SettingsDraft(host: "", port: "4242", pairingSecret: "")) { _ in nil }
+        drainMainQueue()
+
+        XCTAssertNotEqual(window.frame.origin, originalOrigin)
+        window.close()
+    }
+
     func testSettingsWindowBecomesKeyAndHostFieldAcceptsTyping() throws {
         let controller = SettingsWindowController()
         controller.show(draft: SettingsDraft(host: "", port: "4242", pairingSecret: "")) { _ in nil }
