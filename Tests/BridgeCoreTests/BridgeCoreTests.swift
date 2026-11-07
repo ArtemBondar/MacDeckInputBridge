@@ -7,9 +7,9 @@ final class BridgeCoreTests: XCTestCase {
         0: 30, 1: 31, 2: 32, 3: 33, 4: 35, 5: 34, 6: 44, 7: 45, 8: 46, 9: 47,
         10: 86, 11: 48, 12: 16, 13: 17, 14: 18, 15: 19, 16: 21, 17: 20, 18: 2,
         19: 3, 20: 4, 21: 5, 22: 7, 23: 6, 24: 13, 25: 10, 26: 8, 27: 12,
-        28: 9, 29: 11, 30: 26, 31: 27, 32: 43, 33: 39, 34: 40, 35: 41, 36: 28,
-        37: 38, 38: 36, 39: 37, 40: 52, 41: 53, 42: 51, 43: 49, 44: 24, 45: 25,
-        46: 23, 47: 22, 48: 15, 49: 57, 50: 41, 51: 14, 53: 1, 54: 126, 55: 125,
+        28: 9, 29: 11, 30: 27, 31: 24, 32: 22, 33: 26, 34: 23, 35: 25, 36: 28,
+        37: 38, 38: 36, 39: 40, 40: 37, 41: 39, 42: 43, 43: 51, 44: 53, 45: 49,
+        46: 50, 47: 52, 48: 15, 49: 57, 50: 41, 51: 14, 53: 1, 54: 126, 55: 125,
         56: 42, 57: 58, 58: 56, 59: 29, 60: 54, 61: 100, 62: 97, 64: 187, 65: 83,
         67: 55, 69: 78, 71: 69, 72: 115, 73: 114, 74: 113, 75: 98, 76: 96,
         78: 74, 79: 188, 80: 189, 81: 117, 82: 82, 83: 79, 84: 80, 85: 81,
@@ -80,6 +80,29 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertNil(BridgePacket(encoded: Data([9])))
     }
 
+    func testSettingsStorePersistsEndpointAndKeychainSecret() throws {
+        let suite = "MacDeckInputBridgeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let secretStore = InMemoryPairingSecretStore()
+        let store = BridgeSettingsStore(defaults: defaults, secretStore: secretStore)
+        let secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+        try store.saveSettings(BridgeSettings(host: " 192.168.1.5 ", port: 4242))
+        try store.savePairingSecret(secret)
+
+        XCTAssertEqual(store.loadSettings(), BridgeSettings(host: "192.168.1.5", port: 4242))
+        XCTAssertEqual(try store.loadPairingSecret(), secret)
+    }
+
+    func testSettingsValidationRejectsEmptyHostAndInvalidSecret() {
+        XCTAssertThrowsError(try BridgeSettings(host: "", port: 4242).validated()) { error in
+            XCTAssertEqual(error as? BridgeSettingsError, .missingHost)
+        }
+        let store = InMemoryPairingSecretStore()
+        XCTAssertThrowsError(try store.saveSecret("not-a-pairing-secret"))
+    }
+
     func testPhysicalKeyMapping() {
         XCTAssertEqual(KeyMapping.supportedMappings, expectedMappings)
         XCTAssertNil(KeyMapping.linuxCode(for: 999))
@@ -91,6 +114,18 @@ final class BridgeCoreTests: XCTestCase {
             24: 13, 25: 10, 26: 8, 27: 12, 28: 9, 29: 11
         ]
         for (macKeyCode, linuxCode) in expected {
+            XCTAssertEqual(KeyMapping.linuxCode(for: macKeyCode), linuxCode, "macOS keycode \(macKeyCode)")
+        }
+    }
+
+    func testANSIAlphabetMapsToMatchingLinuxKeys() {
+        let alphabet: [(UInt16, UInt16)] = [
+            (0, 30), (11, 48), (8, 46), (2, 32), (14, 18), (3, 33), (5, 34),
+            (4, 35), (34, 23), (38, 36), (40, 37), (37, 38), (46, 50), (45, 49),
+            (31, 24), (35, 25), (12, 16), (15, 19), (1, 31), (17, 20), (32, 22),
+            (9, 47), (13, 17), (7, 45), (16, 21), (6, 44)
+        ]
+        for (macKeyCode, linuxCode) in alphabet {
             XCTAssertEqual(KeyMapping.linuxCode(for: macKeyCode), linuxCode, "macOS keycode \(macKeyCode)")
         }
     }
