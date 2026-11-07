@@ -9,5 +9,6 @@ Perform this checklist on a MacBook and Steam Deck OLED in Desktop Mode before e
 5. After connection, verify alphanumerics, punctuation, arrows, tab, return, delete, function keys, left/right Control, Shift, Option/Alt, and Command/Super. Check key repeat on a held key.
 6. Press the hotkey again while holding Control or Shift. Confirm the Mac has no stuck modifiers and the Deck releases all held keys.
 7. Turn off Wi-Fi or stop the receiver while holding a normal key and while holding each modifier. Confirm local typing returns immediately and the Deck has no stuck key or modifier.
-8. Try a macOS-reserved shortcut. Do not rely on it being suppressed: reserved shortcuts can be handled by macOS before the event tap.
-9. Confirm logs/terminal output contain lifecycle information only, never text typed on either machine.
+8. In the Steam Deck app, disable Mac input while holding a remote modifier. Confirm the app stops promptly and the Deck has no stuck key or modifier. Repeat after changing receiver Settings while input is enabled.
+9. Try a macOS-reserved shortcut. Do not rely on it being suppressed: reserved shortcuts can be handled by macOS before the event tap.
+10. Confirm logs/terminal output contain lifecycle information only, never text typed on either machine.
