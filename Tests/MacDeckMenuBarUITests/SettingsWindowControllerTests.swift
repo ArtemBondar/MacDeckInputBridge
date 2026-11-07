@@ -205,6 +205,17 @@ final class SettingsWindowControllerTests: XCTestCase {
             MenuBarDeckIcon.image(for: .remote).tiffRepresentation,
             "REMOTE must render a visibly captured keyboard state."
         )
+        XCTAssertEqual(MenuBarDeckIcon.connectingFrameCount, 3)
+        XCTAssertNotEqual(
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 0).tiffRepresentation,
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 1).tiffRepresentation,
+            "Connecting animation frames must visibly advance."
+        )
+        XCTAssertNotEqual(
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 1).tiffRepresentation,
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 2).tiffRepresentation,
+            "Connecting animation must progress through all three dots."
+        )
     }
 
     private func drainMainQueue() {
