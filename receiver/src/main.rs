@@ -1,12 +1,14 @@
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use mac_deck_receiver::{
     derive_session_secret, generate_challenge, write_server_hello, BridgeError, Packet,
     PairingSecret, SessionFramer,
 };
 use std::{
+    collections::HashMap,
     io,
     net::{Shutdown, TcpListener, TcpStream},
-    process::ExitCode,
+    path::PathBuf,
+    process::{Command as ProcessCommand, ExitCode},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -36,6 +38,12 @@ enum Command {
         bind: String,
         #[arg(long, env = "MAC_DECK_PAIRING_SECRET")]
         pairing_secret: String,
+        /// Allow the paired Mac to select a mapped Plasma keyboard layout.
+        #[arg(long)]
+        sync_layout_from_mac: bool,
+        /// One mapping in the form com.apple.keylayout.US=0. Repeat for each layout.
+        #[arg(long = "layout-mapping", action = ArgAction::Append)]
+        layout_mappings: Vec<String>,
     },
 }
 
@@ -56,7 +64,7 @@ fn handle_client(
     let session = receive_client_ready(stream, pairing_secret)?;
     session.write_packet(stream, 0, &Packet::ServerReady)?;
     let shutdown = AtomicBool::new(false);
-    handle_authenticated_client(stream, &session, sink, &shutdown)
+    handle_authenticated_client(stream, &session, sink, &shutdown, None)
 }
 
 fn receive_client_ready(
@@ -80,6 +88,7 @@ fn handle_authenticated_client(
     session: &SessionFramer,
     sink: &mut impl KeySink,
     shutdown: &AtomicBool,
+    layout_switcher: Option<&PlasmaLayoutSwitcher>,
 ) -> Result<(), BridgeError> {
     // A bounded timeout makes shutdown deterministic without treating an idle
     // keyboard as a failed session. If a partial frame spans the timeout, the
@@ -108,11 +117,74 @@ fn handle_authenticated_client(
             Packet::Key { code, value } if is_supported_key(code) => {
                 sink.emit(code, value as i32)?
             }
-            Packet::Key { .. } | Packet::ClientReady | Packet::ServerReady => {
-                return Err(BridgeError::InvalidPacket)
+            Packet::KeyboardLayout(identifier) => {
+                if let Some(layout_switcher) = layout_switcher {
+                    if let Err(error) = layout_switcher.switch_to(&identifier) {
+                        eprintln!("Could not synchronize the Deck keyboard layout: {error}");
+                    }
+                }
             }
+            Packet::Key { .. }
+            | Packet::ClientReady
+            | Packet::ServerReady
+            | Packet::ServerReadyWithLayoutSync => return Err(BridgeError::InvalidPacket),
             Packet::ReleaseAll => sink.release_all()?,
             Packet::Ping => {}
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PlasmaLayoutSwitcher {
+    qdbus: PathBuf,
+    mappings: HashMap<String, u8>,
+}
+
+impl PlasmaLayoutSwitcher {
+    fn new(mappings: &[String]) -> Result<Self, String> {
+        let qdbus = ["/usr/bin/qdbus6", "/usr/bin/qdbus"]
+            .iter()
+            .map(PathBuf::from)
+            .find(|path| path.is_file())
+            .ok_or_else(|| "qdbus was not found in this Plasma session".to_owned())?;
+        let mut parsed = HashMap::new();
+        for mapping in mappings {
+            let Some((source, raw_index)) = mapping.split_once('=') else {
+                return Err("invalid layout mapping".to_owned());
+            };
+            let index = raw_index
+                .parse::<u8>()
+                .map_err(|_| "invalid Deck layout number")?;
+            parsed.insert(source.to_owned(), index);
+        }
+        if parsed.is_empty() {
+            return Err("no layout mappings were supplied".to_owned());
+        }
+        Ok(Self {
+            qdbus,
+            mappings: parsed,
+        })
+    }
+
+    fn switch_to(&self, mac_input_source: &str) -> io::Result<()> {
+        let Some(index) = self.mappings.get(mac_input_source) else {
+            // An unmapped layout is not an error: ordinary physical key
+            // forwarding still works using the Deck's current layout.
+            return Ok(());
+        };
+        let index = index.to_string();
+        let status = ProcessCommand::new(&self.qdbus)
+            .args([
+                "org.kde.KWin",
+                "/Layouts",
+                "org.kde.KeyboardLayouts.setLayout",
+                &index,
+            ])
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other("Plasma rejected the layout switch"))
         }
     }
 }
@@ -353,8 +425,21 @@ fn serve(
     pairing_secret: PairingSecret,
     sink: uinput::UinputSink,
     shutdown: Arc<AtomicBool>,
+    sync_layout_from_mac: bool,
+    layout_mappings: Vec<String>,
 ) -> io::Result<()> {
     listener.set_nonblocking(true)?;
+    let layout_switcher = if sync_layout_from_mac {
+        match PlasmaLayoutSwitcher::new(&layout_mappings) {
+            Ok(switcher) => Some(Arc::new(switcher)),
+            Err(error) => {
+                eprintln!("Mac layout sync is disabled for this session: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let sink = Arc::new(Mutex::new(sink));
     let active_session = Arc::new(AtomicBool::new(false));
     let pending_handshakes = Arc::new(AtomicUsize::new(0));
@@ -378,6 +463,7 @@ fn serve(
                 let active_session = Arc::clone(&active_session);
                 let pending_handshakes = Arc::clone(&pending_handshakes);
                 let shutdown = Arc::clone(&shutdown);
+                let layout_switcher = layout_switcher.clone();
                 workers.push(thread::spawn(move || {
                     let session = receive_client_ready(&mut stream, &pairing_secret);
                     if let Ok(session) = session {
@@ -387,8 +473,13 @@ fn serve(
                             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                             .is_ok()
                         {
+                            let ready_packet = if layout_switcher.is_some() {
+                                Packet::ServerReadyWithLayoutSync
+                            } else {
+                                Packet::ServerReady
+                            };
                             let result = session
-                                .write_packet(&mut stream, 0, &Packet::ServerReady)
+                                .write_packet(&mut stream, 0, &ready_packet)
                                 .and_then(|()| {
                                     sink.lock().map_err(|_| BridgeError::Handshake).and_then(
                                         |mut sink| {
@@ -397,6 +488,7 @@ fn serve(
                                                 &session,
                                                 &mut *sink,
                                                 &shutdown,
+                                                layout_switcher.as_deref(),
                                             )
                                         },
                                     )
@@ -438,6 +530,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Serve {
             bind,
             pairing_secret,
+            sync_layout_from_mac,
+            layout_mappings,
         } => {
             let pairing_secret = PairingSecret::parse(&pairing_secret)?;
             let listener = TcpListener::bind(&bind)?;
@@ -446,7 +540,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let signal_shutdown = Arc::clone(&shutdown);
             ctrlc::set_handler(move || signal_shutdown.store(true, Ordering::Release))?;
             eprintln!("Listening on {bind}; keyboard event contents are not logged.");
-            serve(listener, pairing_secret, sink, shutdown)?;
+            serve(
+                listener,
+                pairing_secret,
+                sink,
+                shutdown,
+                sync_layout_from_mac,
+                layout_mappings,
+            )?;
         }
     }
     Ok(())
