@@ -1,5 +1,6 @@
 import AppKit
 import BridgeCore
+import MacDeckMenuBarUI
 import SwiftUI
 
 @main
@@ -12,9 +13,6 @@ struct MacDeckMenuBarApp: App {
         } label: {
             Image(systemName: model.status.symbolName)
                 .accessibilityLabel(model.status.title)
-        }
-        Settings {
-            SettingsView(model: model)
         }
     }
 }
@@ -88,21 +86,26 @@ private final class MenuBarModel: ObservableObject {
             sender.stop()
             started = false
         }
-        SettingsWindowPresenter.show()
+        SettingsWindowController.shared.show(
+            draft: SettingsDraft(host: host, port: port, pairingSecret: pairingSecret)
+        ) { [weak self] draft in
+            self?.saveSettings(draft) ?? "The application is no longer available."
+        }
     }
 
-    func saveSettings() {
+    private func saveSettings(_ draft: SettingsDraft) -> String? {
         do {
+            host = draft.host
+            port = draft.port
+            pairingSecret = draft.pairingSecret
             let settings = try settingsFromFields()
             try store.saveSettings(settings)
             try store.savePairingSecret(pairingSecret)
-            if started {
-                sender.stop()
-                started = false
-            }
             message = "Saved. The next toggle will use these settings."
+            return nil
         } catch {
             message = error.localizedDescription
+            return message
         }
     }
 
@@ -183,92 +186,3 @@ private struct MenuContentView: View {
     }
 }
 
-private struct SettingsView: View {
-    @ObservedObject var model: MenuBarModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Steam Deck")
-                .font(.title2.weight(.semibold))
-            field("Host or IP address") {
-                TextField("192.168.1.42", text: $model.host)
-            }
-            field("Port") {
-                TextField("4242", text: $model.port)
-            }
-            Divider()
-            Text("Pairing")
-                .font(.title2.weight(.semibold))
-            field("Pairing secret") {
-                SecureField("Base64 32-byte secret", text: $model.pairingSecret)
-            }
-            Text("Stored only in this Mac’s Keychain; typed keys are never stored or logged.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if let message = model.message {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            HStack {
-                Spacer()
-                Button("Save") { model.saveSettings() }
-                    .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(24)
-        .frame(width: 520)
-    }
-
-    @ViewBuilder
-    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.headline)
-            content()
-                .textFieldStyle(.roundedBorder)
-        }
-    }
-}
-
-@MainActor
-private enum SettingsWindowPresenter {
-    static func show() {
-        NSApp.activate(ignoringOtherApps: true)
-        if let window = settingsWindow() {
-            bringToFront(window)
-            return
-        }
-
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        // MenuBarExtra dismisses its menu asynchronously. Retrying after that
-        // dismissal ensures a newly created Settings window can become key.
-        bringSettingsWindowToFront(attemptsRemaining: 2)
-    }
-
-    private static func settingsWindow() -> NSWindow? {
-        NSApp.windows.first { window in
-            window.title.localizedCaseInsensitiveContains("settings")
-        }
-    }
-
-    private static func bringToFront(_ window: NSWindow) {
-        window.level = .normal
-        window.hidesOnDeactivate = false
-        window.makeKeyAndOrderFront(nil)
-        window.makeMain()
-        window.orderFrontRegardless()
-    }
-
-    private static func bringSettingsWindowToFront(attemptsRemaining: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            NSApp.activate(ignoringOtherApps: true)
-            if let window = settingsWindow() {
-                bringToFront(window)
-            } else if attemptsRemaining > 0 {
-                bringSettingsWindowToFront(attemptsRemaining: attemptsRemaining - 1)
-            }
-        }
-    }
-}
