@@ -55,10 +55,19 @@ The sender requests Accessibility permission. With the sender running, `Control 
 
 ### macOS menu-bar app
 
-For a native macOS interface, run:
+For development, run:
 
 ```sh
 swift run mac-deck-menu-bar
+```
+
+For normal use, build and launch a real macOS app bundle instead of launching
+the executable from Terminal. This ensures Settings can become the foreground
+application and receive keyboard focus:
+
+```sh
+sh scripts/build-macos-app.sh
+open .build/MacDeckInputBridge.app
 ```
 
 Use **Settings…** to enter the Steam Deck host, port, and pairing secret. The secret is stored in the Mac Keychain, not in preferences or logs. The menu-bar keyboard icon shows the current destination: outline for **LOCAL**, ellipsis while **CONNECTING**, and filled while input is being sent to the **Steam Deck**. The menu also exposes the same `Control + Shift + F12` toggle.
