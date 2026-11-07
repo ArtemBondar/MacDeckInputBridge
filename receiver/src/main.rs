@@ -7,10 +7,17 @@ use std::{
     io,
     net::{Shutdown, TcpListener, TcpStream},
     process::ExitCode,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    thread,
     time::Duration,
 };
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const MAX_PENDING_HANDSHAKES: usize = 4;
 
 #[derive(Parser)]
 #[command(about = "Encrypted Mac keyboard receiver for SteamOS Desktop Mode")]
@@ -37,6 +44,7 @@ trait KeySink {
     fn release_all(&mut self) -> io::Result<()>;
 }
 
+#[cfg(test)]
 fn handle_client(
     stream: &mut TcpStream,
     pairing_secret: &PairingSecret,
@@ -45,6 +53,16 @@ fn handle_client(
     // A peer must prove possession of the pairing secret within a bounded time
     // before it can occupy the receiver. The challenge derives a fresh session
     // key, so an authenticated frame captured on an old connection cannot replay.
+    let session = receive_client_ready(stream, pairing_secret)?;
+    session.write_packet(stream, 0, &Packet::ServerReady)?;
+    let shutdown = AtomicBool::new(false);
+    handle_authenticated_client(stream, &session, sink, &shutdown)
+}
+
+fn receive_client_ready(
+    stream: &mut TcpStream,
+    pairing_secret: &PairingSecret,
+) -> Result<SessionFramer, BridgeError> {
     stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
     stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
     let challenge = generate_challenge();
@@ -54,13 +72,37 @@ fn handle_client(
     if sequence != 0 || packet != Packet::ClientReady {
         return Err(BridgeError::Handshake);
     }
-    session.write_packet(stream, 0, &Packet::ServerReady)?;
-    stream.set_read_timeout(None)?;
-    stream.set_write_timeout(None)?;
+    Ok(session)
+}
 
+fn handle_authenticated_client(
+    stream: &mut TcpStream,
+    session: &SessionFramer,
+    sink: &mut impl KeySink,
+    shutdown: &AtomicBool,
+) -> Result<(), BridgeError> {
+    // A bounded timeout makes shutdown deterministic without treating an idle
+    // keyboard as a failed session. If a partial frame spans the timeout, the
+    // connection is rejected safely by framing/authentication on its next read.
+    stream.set_read_timeout(Some(SESSION_POLL_INTERVAL))?;
+    stream.set_write_timeout(None)?;
     let mut next_sequence = 1u64;
     loop {
-        let (sequence, packet) = session.read_packet(stream)?;
+        if shutdown.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let (sequence, packet) = match session.read_packet(stream) {
+            Ok(packet) => packet,
+            Err(BridgeError::Io(error))
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         expect_next_sequence(&mut next_sequence, sequence)?;
         match packet {
             Packet::Key { code, value } if is_supported_key(code) => {
@@ -306,6 +348,88 @@ mod uinput {
     }
 }
 
+fn serve(
+    listener: TcpListener,
+    pairing_secret: PairingSecret,
+    sink: uinput::UinputSink,
+    shutdown: Arc<AtomicBool>,
+) -> io::Result<()> {
+    listener.set_nonblocking(true)?;
+    let sink = Arc::new(Mutex::new(sink));
+    let active_session = Arc::new(AtomicBool::new(false));
+    let pending_handshakes = Arc::new(AtomicUsize::new(0));
+    let mut workers = Vec::new();
+
+    while !shutdown.load(Ordering::Acquire) {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                let accepted = pending_handshakes
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                        (count < MAX_PENDING_HANDSHAKES).then_some(count + 1)
+                    })
+                    .is_ok();
+                if !accepted {
+                    let _ = stream.shutdown(Shutdown::Both);
+                    continue;
+                }
+
+                let pairing_secret = pairing_secret.clone();
+                let sink = Arc::clone(&sink);
+                let active_session = Arc::clone(&active_session);
+                let pending_handshakes = Arc::clone(&pending_handshakes);
+                let shutdown = Arc::clone(&shutdown);
+                workers.push(thread::spawn(move || {
+                    let session = receive_client_ready(&mut stream, &pairing_secret);
+                    if let Ok(session) = session {
+                        // A receiver has exactly one uinput keyboard. Do not confirm
+                        // REMOTE for a second peer while a first peer owns it.
+                        if active_session
+                            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                            .is_ok()
+                        {
+                            let result = session
+                                .write_packet(&mut stream, 0, &Packet::ServerReady)
+                                .and_then(|()| {
+                                    sink.lock().map_err(|_| BridgeError::Handshake).and_then(
+                                        |mut sink| {
+                                            handle_authenticated_client(
+                                                &mut stream,
+                                                &session,
+                                                &mut *sink,
+                                                &shutdown,
+                                            )
+                                        },
+                                    )
+                                });
+                            if let Ok(mut sink) = sink.lock() {
+                                let _ = sink.release_all();
+                            }
+                            let _ = result;
+                            active_session.store(false, Ordering::Release);
+                        }
+                    }
+                    let _ = stream.shutdown(Shutdown::Both);
+                    pending_handshakes.fetch_sub(1, Ordering::AcqRel);
+                }));
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+        workers.retain(|worker| !worker.is_finished());
+    }
+
+    for worker in workers {
+        let _ = worker.join();
+    }
+    if let Ok(mut sink) = sink.lock() {
+        let _ = sink.release_all();
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     match Cli::parse().command {
         Command::Pair => println!("{}", PairingSecret::generate().to_base64()),
@@ -315,14 +439,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let pairing_secret = PairingSecret::parse(&pairing_secret)?;
             let listener = TcpListener::bind(&bind)?;
-            let mut sink = uinput::UinputSink::open()?;
+            let sink = uinput::UinputSink::open()?;
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let signal_shutdown = Arc::clone(&shutdown);
+            ctrlc::set_handler(move || signal_shutdown.store(true, Ordering::Release))?;
             eprintln!("Listening on {bind}; keyboard event contents are not logged.");
-            for connection in listener.incoming() {
-                let mut stream = connection?;
-                let _ = handle_client(&mut stream, &pairing_secret, &mut sink);
-                let _ = sink.release_all();
-                let _ = stream.shutdown(Shutdown::Both);
-            }
+            serve(listener, pairing_secret, sink, shutdown)?;
         }
     }
     Ok(())
