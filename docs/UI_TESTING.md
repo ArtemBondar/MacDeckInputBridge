@@ -11,8 +11,9 @@ window, accepts typed host input, accepts a pasted pairing secret, and passes
 the entered values to Save. It also verifies the Dock preference defaults to
 shown, persists an explicit choice, keeps an accessory Settings window usable
 when Dock visibility is off, and covers the `LOCAL`, `CONNECTING`, and
-`REMOTE` variants of the Steam Deck `ABC` menu-bar status icon, including
-different rendered image states for connecting and captured keyboard input. Core tests
+`REMOTE` variants of the Steam Deck menu-bar status icon, including a distinct
+`ABC` screen only for captured keyboard input and different rendered states for
+connecting and captured input. Core tests
 cover the connection state machine, hotkey, mapping, pairing/session protocol,
 replay rejection, and safe LOCAL fallbacks.
 
