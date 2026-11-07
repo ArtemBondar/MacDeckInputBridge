@@ -53,7 +53,8 @@ public struct InputStateMachine: Sendable {
                 mode = .connecting
                 return [.passThrough, .beginConnection]
             case .connecting:
-                return [.passThrough]
+                mode = .local
+                return [.passThrough, .releaseAndDisconnect]
             case .remote:
                 mode = .local
                 return [.passThrough, .releaseAndDisconnect]
@@ -87,7 +88,7 @@ public struct InputStateMachine: Sendable {
 
     private func modifierIsDown(_ keyCode: UInt16, modifiers: ModifierState) -> Bool {
         switch keyCode {
-        case 55: return modifiers.contains(.command)
+        case 54, 55: return modifiers.contains(.command)
         case 59, 62: return modifiers.contains(.control)
         case 56, 60: return modifiers.contains(.shift)
         case 57: return modifiers.contains(.capsLock)
@@ -98,7 +99,7 @@ public struct InputStateMachine: Sendable {
 
     private func isModifier(_ keyCode: UInt16) -> Bool {
         switch keyCode {
-        case 55...62: return true
+        case 54...62: return true
         default: return false
         }
     }
