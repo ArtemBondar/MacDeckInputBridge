@@ -74,10 +74,21 @@ private final class MenuBarModel: ObservableObject {
 
     func primaryAction() {
         if needsConfiguration {
-            SettingsWindowPresenter.show()
+            showSettings()
         } else {
             toggle()
         }
+    }
+
+    /// Settings must always receive the Mac's physical keyboard. If forwarding is
+    /// active, tear down the event tap first rather than letting it suppress this
+    /// app's own text fields.
+    func showSettings() {
+        if started {
+            sender.stop()
+            started = false
+        }
+        SettingsWindowPresenter.show()
     }
 
     func saveSettings() {
@@ -163,7 +174,7 @@ private struct MenuContentView: View {
         }
         Divider()
         Button("Settings…") {
-            SettingsWindowPresenter.show()
+            model.showSettings()
         }
         Button("Quit MacDeckInputBridge") {
             model.stop()
@@ -231,12 +242,9 @@ private enum SettingsWindowPresenter {
         }
 
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        DispatchQueue.main.async {
-            NSApp.activate(ignoringOtherApps: true)
-            if let window = settingsWindow() {
-                bringToFront(window)
-            }
-        }
+        // MenuBarExtra dismisses its menu asynchronously. Retrying after that
+        // dismissal ensures a newly created Settings window can become key.
+        bringSettingsWindowToFront(attemptsRemaining: 2)
     }
 
     private static func settingsWindow() -> NSWindow? {
@@ -249,6 +257,18 @@ private enum SettingsWindowPresenter {
         window.level = .normal
         window.hidesOnDeactivate = false
         window.makeKeyAndOrderFront(nil)
+        window.makeMain()
         window.orderFrontRegardless()
+    }
+
+    private static func bringSettingsWindowToFront(attemptsRemaining: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NSApp.activate(ignoringOtherApps: true)
+            if let window = settingsWindow() {
+                bringToFront(window)
+            } else if attemptsRemaining > 0 {
+                bringSettingsWindowToFront(attemptsRemaining: attemptsRemaining - 1)
+            }
+        }
     }
 }
