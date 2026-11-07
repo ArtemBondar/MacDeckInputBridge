@@ -33,6 +33,15 @@ cargo build --release --locked --features desktop-ui --bins
 ./target/release/mac-deck-receiver-ui
 ```
 
+To make it available in Steam Deck Desktop Mode's application launcher, install both sibling binaries and the Freedesktop launcher in your user account:
+
+```sh
+install -Dm755 target/release/mac-deck-receiver target/release/mac-deck-receiver-ui ~/.local/bin/
+install -Dm644 resources/mac-deck-input-bridge.desktop ~/.local/share/applications/mac-deck-input-bridge.desktop
+```
+
+The launcher has `Terminal=false` and runs `mac-deck-receiver-ui` from your `PATH`; ensure `~/.local/bin` is on that path (it is by default in SteamOS Desktop Mode). Log out and back in, or restart the application launcher, if it does not appear immediately.
+
 The app stores only its listen address and pairing secret in `$XDG_CONFIG_HOME/mac-deck-input-bridge/receiver.toml` (or `~/.config/...`), with owner-only permissions. It never records forwarded key events or typed content. The receiver still needs the non-root `/dev/uinput` setup described in [`docs/steamos-setup.md`](docs/steamos-setup.md).
 
 Build and run the sender on macOS:
