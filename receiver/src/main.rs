@@ -192,10 +192,29 @@ mod uinput {
         unsafe { std::slice::from_raw_parts((value as *const T).cast(), size_of::<T>()) }
     }
     fn supported_keys() -> Vec<u16> {
-        // Matches Sources/BridgeCore/KeyMapping.swift, avoiding uinput capabilities the bridge cannot emit.
-        (1..=111)
-            .filter(|key| !matches!(key, 94 | 95 | 98 | 99 | 101 | 109))
-            .collect()
+        // Matches Sources/BridgeCore/KeyMapping.swift and intentionally omits
+        // capabilities that the sender cannot emit.
+        let mut keys: Vec<u16> = (1..=69).collect();
+        keys.extend(71..=83);
+        keys.extend([
+            86, 87, 88, 96, 97, 98, 100, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 113,
+            114, 115, 117, 125, 126, 127,
+        ]);
+        keys.extend(183..=190);
+        keys
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::supported_keys;
+
+        #[test]
+        fn supports_every_extended_key_the_sender_can_emit() {
+            let keys = supported_keys();
+            for key in [83, 98, 110, 113, 114, 115, 117, 125, 126, 127, 183, 190] {
+                assert!(keys.contains(&key), "missing evdev key {key}");
+            }
+        }
     }
 }
 
