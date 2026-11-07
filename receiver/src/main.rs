@@ -301,7 +301,15 @@ fn automatic_layout_index(
     configured_layouts: &[ConfiguredLayout],
 ) -> Option<u8> {
     let source_name = mac_input_source.rsplit('.').next()?;
-    let source_terms = layout_match_terms(source_name);
+    let mut source_terms = layout_match_terms(source_name);
+    // macOS calls its standard US physical keyboard source "ABC", whereas
+    // XKB/Plasma calls the same layout "us". Treat this as a platform alias,
+    // not a user-specific language mapping, so no manual rule is required.
+    if source_terms.iter().any(|term| term == "abc")
+        && !source_terms.iter().any(|term| term == "us")
+    {
+        source_terms.push("us".to_owned());
+    }
     if source_terms.is_empty() {
         return None;
     }
@@ -837,6 +845,10 @@ mod receiver_tests {
         ];
         assert_eq!(
             automatic_layout_index("com.apple.keylayout.US", &layouts),
+            Some(0)
+        );
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.ABC", &layouts),
             Some(0)
         );
         assert_eq!(
