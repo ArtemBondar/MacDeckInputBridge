@@ -37,6 +37,12 @@ public struct InputStateMachine: Sendable {
     public mutating func connectionLost() { mode = .local; localOnlyKeys.removeAll() }
 
     public mutating func handle(_ event: CapturedKeyEvent) -> [InputAction] {
+        // A key whose downstroke was delivered locally must never later produce a
+        // remote-only key-up if the handshake finishes while it is held.
+        if mode != .remote, event.kind == .keyDown, !event.isRepeat,
+           KeyMapping.linuxCode(for: event.keyCode) != nil {
+            localOnlyKeys.insert(event.keyCode)
+        }
         // Modifiers held before REMOTE is entered were delivered locally. Their later
         // key-up must also stay local, even if the TCP connection becomes ready first.
         if event.kind == .flagsChanged, mode != .remote, isModifier(event.keyCode) {
