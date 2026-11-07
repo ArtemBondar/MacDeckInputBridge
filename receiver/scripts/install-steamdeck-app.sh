@@ -50,25 +50,37 @@ chmod 644 "$applications_root/mac-deck-input-bridge.desktop"
 # registered as an application resource. xdg-icon-resource handles the correct
 # user data directory and cache format for both older Plasma and current KDE.
 if command -v xdg-icon-resource >/dev/null 2>&1; then
-  xdg-icon-resource install --mode user --context apps --size 1024 \
-    "$installed_icon" mac-deck-input-bridge >/dev/null 2>&1 || true
-  xdg-icon-resource forceupdate --mode user >/dev/null 2>&1 || true
+  if ! xdg-icon-resource install --mode user --context apps --size 1024 \
+    "$installed_icon" mac-deck-input-bridge; then
+    echo "Warning: xdg-icon-resource could not register the MacDeck icon." >&2
+  fi
+  if ! xdg-icon-resource forceupdate --mode user; then
+    echo "Warning: xdg-icon-resource could not refresh its icon cache." >&2
+  fi
 fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then
-  update-desktop-database "$applications_root" >/dev/null 2>&1 || true
+  if ! update-desktop-database "$applications_root"; then
+    echo "Warning: could not refresh the desktop-entry database." >&2
+  fi
 fi
 
 if { [ "$icons_root" = "$HOME/.local/share/icons/hicolor/1024x1024/apps" ] || \
      [ "$fallback_icons_root" = "$HOME/.local/share/icons/hicolor/scalable/apps" ]; } && \
   command -v gtk-update-icon-cache >/dev/null 2>&1; then
-  gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+  if ! gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor"; then
+    echo "Warning: could not refresh the GTK icon cache." >&2
+  fi
 fi
 
 if command -v kbuildsycoca6 >/dev/null 2>&1; then
-  kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
+  if ! kbuildsycoca6 --noincremental; then
+    echo "Warning: could not refresh the Plasma application cache." >&2
+  fi
 elif command -v kbuildsycoca5 >/dev/null 2>&1; then
-  kbuildsycoca5 --noincremental >/dev/null 2>&1 || true
+  if ! kbuildsycoca5 --noincremental; then
+    echo "Warning: could not refresh the Plasma application cache." >&2
+  fi
 fi
 
 echo "Installed MacDeck. Open it from the Steam Deck application launcher."
