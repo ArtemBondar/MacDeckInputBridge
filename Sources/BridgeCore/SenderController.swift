@@ -75,6 +75,9 @@ public final class SenderController {
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                 state.connectionLost()
                 client?.close()
+                // Quartz disables a slow tap. Re-enable it only after returning to
+                // LOCAL, so an event-tap failure can never keep suppressing input.
+                if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
                 updateMode()
             }
             return Unmanaged.passUnretained(event)
@@ -152,39 +155,154 @@ public enum SenderControllerError: LocalizedError {
 }
 
 private final class SenderClient {
+    private static let maximumReceiveLength = SessionFramer.maximumFrameSize + 4
+
     private let queue = DispatchQueue(label: "MacDeckInputBridge.transport")
-    private let framer: SecureFramer
+    private let pairing: PairingSecret
     private var connection: NWConnection?
+    private var decoder = FrameDecoder()
+    private var session: SessionFramer?
+    private var isReady = false
+    private var nextGeneration: UInt64 = 0
+    private var activeGeneration: UInt64?
     var onReady: (() -> Void)?
     var onFailure: (() -> Void)?
 
     init(pairingSecret: String) throws {
-        framer = try SecureFramer(pairing: PairingSecret(base64: pairingSecret))
+        pairing = try PairingSecret(base64: pairingSecret)
     }
 
     func connect(host: String, port: UInt16) {
-        close()
-        let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        queue.async { [weak self] in self?.startConnection(host: host, port: port) }
+    }
+
+    func send(_ packet: BridgePacket) {
+        queue.async { [weak self] in self?.sendApplicationPacket(packet) }
+    }
+
+    func close() {
+        queue.async { [weak self] in self?.invalidateActiveConnection() }
+    }
+
+    private func startConnection(host: String, port: UInt16) {
+        invalidateActiveConnection()
+        nextGeneration &+= 1
+        let generation = nextGeneration
+        activeGeneration = generation
+        decoder = FrameDecoder()
+        session = nil
+        isReady = false
+
+        let connection = NWConnection(
+            host: NWEndpoint.Host(host),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
+        )
         self.connection = connection
         connection.stateUpdateHandler = { [weak self] state in
-            switch state {
-            case .ready: self?.onReady?()
-            case .failed, .cancelled: self?.onFailure?()
-            default: break
-            }
+            self?.handleConnectionState(state, generation: generation)
         }
         connection.start(queue: queue)
     }
 
-    func send(_ packet: BridgePacket) {
-        guard let connection, let frame = try? framer.seal(packet) else { onFailure?(); return }
+    private func handleConnectionState(_ state: NWConnection.State, generation: UInt64) {
+        guard activeGeneration == generation else { return }
+        switch state {
+        case .ready:
+            receiveNext(generation: generation)
+        case .failed, .cancelled:
+            failActiveConnection(generation: generation)
+        default:
+            break
+        }
+    }
+
+    private func receiveNext(generation: UInt64) {
+        guard activeGeneration == generation, let connection else { return }
+        connection.receive(
+            minimumIncompleteLength: 1,
+            maximumLength: Self.maximumReceiveLength
+        ) { [weak self] data, _, complete, error in
+            self?.handleReceived(data: data, complete: complete, error: error, generation: generation)
+        }
+    }
+
+    private func handleReceived(
+        data: Data?,
+        complete: Bool,
+        error: NWError?,
+        generation: UInt64
+    ) {
+        guard activeGeneration == generation else { return }
+        do {
+            if let data, !data.isEmpty {
+                for frame in try decoder.append(data) {
+                    try processReceivedFrame(frame, generation: generation)
+                }
+            }
+            if error != nil || complete {
+                failActiveConnection(generation: generation)
+            } else {
+                receiveNext(generation: generation)
+            }
+        } catch {
+            failActiveConnection(generation: generation)
+        }
+    }
+
+    private func processReceivedFrame(_ frame: Data, generation: UInt64) throws {
+        guard activeGeneration == generation else { return }
+        guard var session else {
+            let hello = try ServerHello(encoded: frame)
+            self.session = try SessionFramer(pairing: pairing, challenge: hello.challenge)
+            try sendPacket(.clientReady, generation: generation)
+            return
+        }
+
+        let packet = try session.open(combined: frame)
+        self.session = session
+        guard !isReady else { throw ProtocolError.invalidFrame }
+        guard packet == .serverReady else { throw ProtocolError.invalidFrame }
+        isReady = true
+        onReady?()
+    }
+
+    private func sendApplicationPacket(_ packet: BridgePacket) {
+        guard isReady, let generation = activeGeneration else { return }
+        do {
+            try sendPacket(packet, generation: generation)
+        } catch {
+            failActiveConnection(generation: generation)
+        }
+    }
+
+    private func sendPacket(_ packet: BridgePacket, generation: UInt64) throws {
+        guard activeGeneration == generation, let connection, var session else { throw ProtocolError.invalidFrame }
+        let frame = try session.seal(packet)
+        self.session = session
         connection.send(content: frame, completion: .contentProcessed { [weak self] error in
-            if error != nil { self?.onFailure?() }
+            if error != nil { self?.failActiveConnection(generation: generation) }
         })
     }
 
-    func close() {
+    private func failActiveConnection(generation: UInt64) {
+        guard activeGeneration == generation else { return }
+        let connection = self.connection
+        activeGeneration = nil
+        self.connection = nil
+        session = nil
+        isReady = false
         connection?.cancel()
-        connection = nil
+        onFailure?()
+    }
+
+    private func invalidateActiveConnection() {
+        let connection = self.connection
+        activeGeneration = nil
+        self.connection = nil
+        decoder = FrameDecoder()
+        session = nil
+        isReady = false
+        connection?.cancel()
     }
 }
