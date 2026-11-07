@@ -11,8 +11,10 @@ let package = Package(
     ],
     targets: [
         .target(name: "BridgeCore"),
+        .target(name: "MacDeckMenuBarUI"),
         .executableTarget(name: "MacDeckSender", dependencies: ["BridgeCore"]),
-        .executableTarget(name: "MacDeckMenuBar", dependencies: ["BridgeCore"]),
-        .testTarget(name: "BridgeCoreTests", dependencies: ["BridgeCore"])
+        .executableTarget(name: "MacDeckMenuBar", dependencies: ["BridgeCore", "MacDeckMenuBarUI"]),
+        .testTarget(name: "BridgeCoreTests", dependencies: ["BridgeCore"]),
+        .testTarget(name: "MacDeckMenuBarUITests", dependencies: ["MacDeckMenuBarUI"])
     ]
 )
