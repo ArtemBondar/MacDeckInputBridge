@@ -7,6 +7,9 @@ public enum BridgePacket: Equatable, Sendable {
     case ping
     case clientReady
     case serverReady
+    /// The receiver has opted into layout synchronization for this session.
+    case serverReadyWithLayoutSync
+    case keyboardLayout(identifier: String)
 
     public func encoded() -> Data {
         switch self {
@@ -15,6 +18,11 @@ public enum BridgePacket: Equatable, Sendable {
         case .ping: return Data([3])
         case .clientReady: return Data([4])
         case .serverReady: return Data([5])
+        case .serverReadyWithLayoutSync: return Data([6])
+        case let .keyboardLayout(identifier):
+            let identifierBytes = Array(identifier.utf8)
+            precondition((1...128).contains(identifierBytes.count))
+            return Data([7, UInt8(identifierBytes.count)] + identifierBytes)
         }
     }
 
@@ -26,7 +34,20 @@ public enum BridgePacket: Equatable, Sendable {
         } else if bytes == [3] { self = .ping
         } else if bytes == [4] { self = .clientReady
         } else if bytes == [5] { self = .serverReady
+        } else if bytes == [6] { self = .serverReadyWithLayoutSync
+        } else if bytes.count >= 3, bytes[0] == 7, bytes[1] <= 128,
+                  bytes.count == 2 + Int(bytes[1]),
+                  let identifier = String(bytes: bytes.dropFirst(2), encoding: .utf8),
+                  Self.isValidKeyboardLayoutIdentifier(identifier) {
+            self = .keyboardLayout(identifier: identifier)
         } else { return nil }
+    }
+
+    private static func isValidKeyboardLayoutIdentifier(_ identifier: String) -> Bool {
+        !identifier.isEmpty && identifier.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (65...90).contains(byte) ||
+                (97...122).contains(byte) || byte == 45 || byte == 46 || byte == 95
+        }
     }
 }
 
