@@ -183,9 +183,9 @@ final class SettingsWindowControllerTests: XCTestCase {
 
     func testMenuBarDeckIconIsTemplateAccessibleAndExposesEveryConnectionState() {
         let expectedDescriptions: [(MenuBarStatus, String)] = [
-            (.local, "Steam Deck keyboard input, ABC, local"),
-            (.connecting, "Steam Deck keyboard input, ABC, connecting"),
-            (.remote, "Steam Deck keyboard input, ABC, sending to Steam Deck")
+            (.local, "Steam Deck keyboard input, local"),
+            (.connecting, "Steam Deck keyboard input, connecting"),
+            (.remote, "Steam Deck keyboard input, sending to Steam Deck")
         ]
         for (status, description) in expectedDescriptions {
             let image = MenuBarDeckIcon.image(for: status)
