@@ -44,7 +44,9 @@ absolute path to its UI binary (so Plasma does not depend on its `PATH`), and
 installs the MacDeck icon. Run it again after building a newer version. It also
 asks Plasma to refresh its application cache; if the app is not visible right
 away, log out and back in. A full checkout installs the exact macOS app icon;
-source-only archives use the matching Steam Deck silhouette instead.
+source-only archives use the matching Steam Deck silhouette instead. The same
+Dock PNG is embedded in the receiver window and its Wayland app ID matches the
+launcher, so the Plasma task manager groups it with the correct icon.
 
 The app stores only its listen address and pairing secret in `$XDG_CONFIG_HOME/mac-deck-input-bridge/receiver.toml` (or `~/.config/...`), with owner-only permissions. It never records forwarded key events or typed content. The receiver still needs the non-root `/dev/uinput` setup described in [`docs/steamos-setup.md`](docs/steamos-setup.md).
 
