@@ -45,6 +45,9 @@ private final class MenuBarModel: ObservableObject {
         sender.statusChanged = { [weak self] mode in
             self?.status = SenderStatus(mode: mode)
         }
+        sender.connectionFailed = { [weak self] in
+            self?.message = "Connection was not established. Check the Steam Deck address, pairing secret, and that Mac input is enabled on the Deck."
+        }
     }
 
     func toggle() {
@@ -53,6 +56,27 @@ private final class MenuBarModel: ObservableObject {
             sender.toggle()
         } catch {
             message = error.localizedDescription
+        }
+    }
+
+    var needsConfiguration: Bool {
+        host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pairingSecret.isEmpty
+    }
+
+    var primaryActionTitle: String {
+        if needsConfiguration { return "Configure Steam Deck…" }
+        switch status {
+        case .local: return "Send keyboard to Steam Deck"
+        case .connecting: return "Cancel connection"
+        case .remote: return "Return keyboard to Mac"
+        }
+    }
+
+    func primaryAction() {
+        if needsConfiguration {
+            SettingsWindowPresenter.show()
+        } else {
+            toggle()
         }
     }
 
@@ -125,15 +149,21 @@ private struct MenuContentView: View {
 
     var body: some View {
         Text(model.status.title)
-        Button(model.status == .remote ? "Return keyboard to Mac" : "Send keyboard to Steam Deck") {
-            model.toggle()
+        Button(model.primaryActionTitle) {
+            model.primaryAction()
         }
         Text("Shortcut: Control + Shift + F12")
             .font(.caption)
             .foregroundStyle(.secondary)
+        if let message = model.message {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
         Divider()
         Button("Settings…") {
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            SettingsWindowPresenter.show()
         }
         Button("Quit MacDeckInputBridge") {
             model.stop()
@@ -146,26 +176,79 @@ private struct SettingsView: View {
     @ObservedObject var model: MenuBarModel
 
     var body: some View {
-        Form {
-            Section("Steam Deck") {
-                TextField("Host or IP address", text: $model.host)
-                TextField("Port", text: $model.port)
-                    .textFieldStyle(.roundedBorder)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Steam Deck")
+                .font(.title2.weight(.semibold))
+            field("Host or IP address") {
+                TextField("192.168.1.42", text: $model.host)
             }
-            Section("Pairing") {
-                SecureField("Pairing secret", text: $model.pairingSecret)
-                Text("Stored only in this Mac’s Keychain; typed keys are never stored or logged.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            field("Port") {
+                TextField("4242", text: $model.port)
             }
+            Divider()
+            Text("Pairing")
+                .font(.title2.weight(.semibold))
+            field("Pairing secret") {
+                SecureField("Base64 32-byte secret", text: $model.pairingSecret)
+            }
+            Text("Stored only in this Mac’s Keychain; typed keys are never stored or logged.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             if let message = model.message {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Button("Save") { model.saveSettings() }
+            HStack {
+                Spacer()
+                Button("Save") { model.saveSettings() }
+                    .keyboardShortcut(.defaultAction)
+            }
         }
-        .padding()
-        .frame(width: 440)
+        .padding(24)
+        .frame(width: 520)
+    }
+
+    @ViewBuilder
+    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.headline)
+            content()
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+}
+
+@MainActor
+private enum SettingsWindowPresenter {
+    static func show() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = settingsWindow() {
+            bringToFront(window)
+            return
+        }
+
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            if let window = settingsWindow() {
+                bringToFront(window)
+            }
+        }
+    }
+
+    private static func settingsWindow() -> NSWindow? {
+        NSApp.windows.first { window in
+            window.title.localizedCaseInsensitiveContains("settings")
+        }
+    }
+
+    private static func bringToFront(_ window: NSWindow) {
+        window.level = .normal
+        window.hidesOnDeactivate = false
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 }
