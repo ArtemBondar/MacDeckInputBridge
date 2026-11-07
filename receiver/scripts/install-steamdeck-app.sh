@@ -26,16 +26,19 @@ install -m 755 "$receiver_binary" "$bin_root/mac-deck-receiver"
 install -m 755 "$ui_binary" "$bin_root/mac-deck-receiver-ui"
 if [ -f "$icon_source" ]; then
   # The full repository includes the exact macOS app icon.
-  install -m 644 "$icon_source" "$icons_root/mac-deck-input-bridge.png"
+  installed_icon="$icons_root/mac-deck-input-bridge.png"
+  install -m 644 "$icon_source" "$installed_icon"
 else
   # A source archive may exclude large generated assets. The launcher must
   # still work; use the matching, source-controlled menu-bar silhouette.
-  install -m 644 "$fallback_icon" "$fallback_icons_root/mac-deck-input-bridge.svg"
+  installed_icon="$fallback_icons_root/mac-deck-input-bridge.svg"
+  install -m 644 "$fallback_icon" "$installed_icon"
   echo "MacDeck PNG icon was not found; installed the matching vector icon instead." >&2
 fi
 
 mkdir -p "$applications_root"
-sed "s|@MAC_DECK_RECEIVER_UI@|$bin_root/mac-deck-receiver-ui|" \
+sed -e "s|@MAC_DECK_RECEIVER_UI@|$bin_root/mac-deck-receiver-ui|" \
+  -e "s|@MAC_DECK_ICON@|$installed_icon|" \
   "$receiver_root/resources/mac-deck-input-bridge.desktop" \
   > "$applications_root/mac-deck-input-bridge.desktop"
 chmod 644 "$applications_root/mac-deck-input-bridge.desktop"
