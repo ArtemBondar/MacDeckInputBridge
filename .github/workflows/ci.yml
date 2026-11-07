@@ -18,4 +18,6 @@ jobs:
         working-directory: receiver
     steps:
       - uses: actions/checkout@v4
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
