@@ -66,6 +66,7 @@ mod uinput {
     const UI_SET_EVBIT: libc::c_ulong = 0x4004_5564;
     const UI_SET_KEYBIT: libc::c_ulong = 0x4004_5565;
     const BUS_USB: u16 = 0x03;
+    const DEVICE_NAME: &[u8] = b"Mac Deck Input Bridge";
 
     #[repr(C)]
     struct InputId {
@@ -112,7 +113,7 @@ mod uinput {
                 }
             }
             let mut setup: UinputUserDev = unsafe { std::mem::zeroed() };
-            setup.name[..20].copy_from_slice(b"Mac Deck Input Bridge");
+            setup.name[..DEVICE_NAME.len()].copy_from_slice(DEVICE_NAME);
             setup.id = InputId {
                 bustype: BUS_USB,
                 vendor: 0x1d6b,
