@@ -38,5 +38,11 @@ cat > "$contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# The SwiftPM executable is linker-signed with its target name. Re-sign the
+# completed bundle with its final bundle identifier so macOS TCC evaluates the
+# same identity shown in Accessibility settings.
+codesign --force --sign - --identifier com.artembondar.MacDeckInputBridge "$app_root"
+codesign --verify --deep --strict "$app_root"
+
 echo "Built $app_root"
 echo "Launch it with: open '$app_root'"
