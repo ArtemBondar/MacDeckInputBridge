@@ -1,43 +1,47 @@
 import AppKit
 
-/// A small, template-safe status image: Steam Deck controls above the letters
-/// “ABC”, which communicate that this status item controls keyboard input.
+/// A compact, template-safe Steam Deck status image. Its screen is the primary
+/// state signal: empty for LOCAL, dots for CONNECTING, filled for REMOTE.
+/// The `ABC` label keeps the input purpose readable at menu-bar scale.
 public enum MenuBarDeckIcon {
     public static func image(for status: MenuBarStatus) -> NSImage {
-        let size = NSSize(width: 29, height: 21)
-        let image = NSImage(size: size, flipped: false) { rect in
+        let size = NSSize(width: 27, height: 19)
+        let image = NSImage(size: size, flipped: false) { _ in
             NSColor.white.setFill()
+            NSColor.white.setStroke()
 
-            let deck = NSRect(x: 2, y: 7, width: 25, height: 10)
-            NSBezierPath(roundedRect: deck, xRadius: 4, yRadius: 4).fill()
+            let deck = NSBezierPath(roundedRect: NSRect(x: 1, y: 7, width: 25, height: 9), xRadius: 4, yRadius: 4)
+            deck.lineWidth = 1.5
+            deck.stroke()
 
-            // Cut out the central display and controls using transparency. As a
-            // template image, macOS supplies the final foreground color.
-            let graphicsContext = NSGraphicsContext.current
-            let previousOperation = graphicsContext?.compositingOperation
-            graphicsContext?.compositingOperation = .clear
-            NSBezierPath(roundedRect: NSRect(x: 10, y: 9, width: 9, height: 5), xRadius: 1, yRadius: 1).fill()
-            NSBezierPath(ovalIn: NSRect(x: 5, y: 10, width: 3, height: 3)).fill()
-            NSBezierPath(ovalIn: NSRect(x: 21, y: 10, width: 3, height: 3)).fill()
-            graphicsContext?.compositingOperation = previousOperation ?? .sourceOver
-
-            let statusDot = NSRect(x: 23.5, y: 15.5, width: 2.5, height: 2.5)
+            let screen = NSRect(x: 9, y: 10, width: 9, height: 3.5)
+            let screenPath = NSBezierPath(roundedRect: screen, xRadius: 0.8, yRadius: 0.8)
             switch status {
             case .local:
-                NSBezierPath(ovalIn: statusDot).stroke()
+                screenPath.lineWidth = 1.2
+                screenPath.stroke()
             case .connecting:
-                NSBezierPath(ovalIn: statusDot).fill()
+                screenPath.lineWidth = 1.2
+                screenPath.stroke()
+                for x in [10.7, 13.0, 15.3] {
+                    NSBezierPath(ovalIn: NSRect(x: x, y: 11.1, width: 1.1, height: 1.1)).fill()
+                }
             case .remote:
-                NSBezierPath(ovalIn: statusDot.insetBy(dx: -0.75, dy: -0.75)).fill()
+                screenPath.fill()
             }
+
+            // Minimal controls retain the Steam Deck silhouette without making
+            // the status item busy at the approximately 18-point menu-bar size.
+            NSBezierPath(ovalIn: NSRect(x: 4.1, y: 10.4, width: 2.1, height: 2.1)).fill()
+            NSBezierPath(ovalIn: NSRect(x: 20.8, y: 10.4, width: 2.1, height: 2.1)).fill()
 
             let label = "ABC" as NSString
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.monospacedSystemFont(ofSize: 5.5, weight: .semibold),
+                .font: NSFont.monospacedSystemFont(ofSize: 6.5, weight: .bold),
                 .foregroundColor: NSColor.white
             ]
             let labelSize = label.size(withAttributes: attributes)
-            label.draw(at: NSPoint(x: (size.width - labelSize.width) / 2, y: 0), withAttributes: attributes)
+            label.draw(at: NSPoint(x: (size.width - labelSize.width) / 2, y: 0.2), withAttributes: attributes)
             return true
         }
         image.isTemplate = true
