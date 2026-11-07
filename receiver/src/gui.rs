@@ -10,10 +10,12 @@ use std::{
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 const APP_NAME: &str = "MacDeck";
+const APP_ID: &str = "mac-deck-input-bridge";
 const CONFIG_DIRECTORY: &str = "mac-deck-input-bridge";
 const CONFIG_FILE: &str = "receiver.toml";
 
@@ -428,8 +430,19 @@ fn local_ipv4_addresses_from(interfaces: impl IntoIterator<Item = Interface>) ->
 }
 
 fn main() -> eframe::Result<()> {
+    // Wayland needs both a window icon and an application ID that matches the
+    // desktop file. Without them Plasma uses eframe's default icon in the
+    // task manager even when the launcher itself has a correctly installed
+    // icon.
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!(
+        "../../assets/MacDeckInputBridgeIcon.png"
+    ))
+    .expect("the bundled MacDeck Dock icon must be a valid PNG");
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([500.0, 360.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([500.0, 360.0])
+            .with_app_id(APP_ID)
+            .with_icon(Arc::new(icon)),
         ..Default::default()
     };
     eframe::run_native(
