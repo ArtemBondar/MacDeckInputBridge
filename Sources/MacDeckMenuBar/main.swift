@@ -45,6 +45,7 @@ private final class MenuBarModel: ObservableObject {
     private let sender = SenderController()
     private var started = false
     private var connectionAnimationTimer: Timer?
+    private var hasOutstandingAccessibilityNotice = false
 
     init(store: BridgeSettingsStore = BridgeSettingsStore()) {
         self.store = store
@@ -71,6 +72,10 @@ private final class MenuBarModel: ObservableObject {
             try startIfNeeded()
             sender.toggle()
         } catch {
+            if let senderError = error as? SenderControllerError,
+               case .accessibilityPermissionRequired = senderError {
+                hasOutstandingAccessibilityNotice = true
+            }
             message = error.localizedDescription
         }
     }
@@ -96,6 +101,7 @@ private final class MenuBarModel: ObservableObject {
     /// active, tear down the event tap first rather than letting it suppress this
     /// app's own text fields.
     func showSettings() {
+        refreshAccessibilityNotice()
         if started {
             sender.stop()
             started = false
@@ -138,6 +144,12 @@ private final class MenuBarModel: ObservableObject {
         } else {
             stopConnectionAnimation()
         }
+    }
+
+    private func refreshAccessibilityNotice() {
+        guard hasOutstandingAccessibilityNotice, SenderController.isAccessibilityTrusted() else { return }
+        hasOutstandingAccessibilityNotice = false
+        message = nil
     }
 
     private func startConnectionAnimation() {
