@@ -109,8 +109,9 @@ public final class BridgeSettingsStore {
     }
 
     public func loadSettings() -> BridgeSettings {
-        let port = defaults.integer(forKey: Key.port)
-        return BridgeSettings(host: defaults.string(forKey: Key.host) ?? "", port: UInt16(port == 0 ? 4242 : port))
+        let storedPort = defaults.integer(forKey: Key.port)
+        let port = (1...Int(UInt16.max)).contains(storedPort) ? UInt16(storedPort) : 4242
+        return BridgeSettings(host: defaults.string(forKey: Key.host) ?? "", port: port)
     }
 
     public func saveSettings(_ settings: BridgeSettings) throws {
