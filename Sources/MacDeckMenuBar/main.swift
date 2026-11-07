@@ -57,23 +57,19 @@ private final class MenuBarModel: ObservableObject {
         }
     }
 
-    var needsConfiguration: Bool {
-        host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pairingSecret.isEmpty
+    var primaryAction: MenuBarPrimaryAction {
+        MenuBarPresentation.primaryAction(
+            status: status.presentationStatus,
+            host: host,
+            pairingSecret: pairingSecret
+        )
     }
 
-    var primaryActionTitle: String {
-        if needsConfiguration { return "Configure Steam Deck…" }
-        switch status {
-        case .local: return "Send keyboard to Steam Deck"
-        case .connecting: return "Cancel connection"
-        case .remote: return "Return keyboard to Mac"
-        }
-    }
-
-    func primaryAction() {
-        if needsConfiguration {
+    func performPrimaryAction() {
+        switch primaryAction {
+        case .configure:
             showSettings()
-        } else {
+        case .send, .cancelConnection, .returnToMac:
             toggle()
         }
     }
@@ -87,7 +83,8 @@ private final class MenuBarModel: ObservableObject {
             started = false
         }
         SettingsWindowController.shared.show(
-            draft: SettingsDraft(host: host, port: port, pairingSecret: pairingSecret)
+            draft: SettingsDraft(host: host, port: port, pairingSecret: pairingSecret),
+            notice: message
         ) { draft in
             self.saveSettings(draft)
         }
@@ -156,6 +153,14 @@ private enum SenderStatus: Equatable {
         case .remote: return "keyboard.fill"
         }
     }
+
+    var presentationStatus: MenuBarStatus {
+        switch self {
+        case .local: return .local
+        case .connecting: return .connecting
+        case .remote: return .remote
+        }
+    }
 }
 
 private struct MenuContentView: View {
@@ -163,17 +168,19 @@ private struct MenuContentView: View {
 
     var body: some View {
         Text(model.status.title)
-        Button(model.primaryActionTitle) {
-            model.primaryAction()
+            .font(.headline)
+        Button(model.primaryAction.title) {
+            model.performPrimaryAction()
         }
-        Text("Shortcut: Control + Shift + F12")
+        Text("Shortcut: ⌃⇧F12")
             .font(.caption)
-            .foregroundStyle(.secondary)
-        if let message = model.message {
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .foregroundStyle(.primary.opacity(0.78))
+        if model.message != nil {
+            Button(MenuBarPresentation.attentionTitle) {
+                model.showSettings()
+            }
+            .font(.caption)
+            .foregroundStyle(.primary.opacity(0.78))
         }
         Divider()
         Button("Settings…") {
