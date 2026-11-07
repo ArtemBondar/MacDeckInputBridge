@@ -21,7 +21,10 @@ struct MacDeckMenuBarApp: App {
         MenuBarExtra {
             MenuContentView(model: model)
         } label: {
-            Image(nsImage: MenuBarDeckIcon.image(for: model.status.presentationStatus))
+            Image(nsImage: MenuBarDeckIcon.image(
+                for: model.status.presentationStatus,
+                connectingPhase: model.connectionAnimationPhase
+            ))
                 .renderingMode(.template)
                 .accessibilityLabel(model.status.title)
         }
@@ -36,10 +39,12 @@ private final class MenuBarModel: ObservableObject {
     @Published var showInDock: Bool
     @Published var status: SenderStatus = .local
     @Published var message: String?
+    @Published var connectionAnimationPhase = 0
 
     private let store: BridgeSettingsStore
     private let sender = SenderController()
     private var started = false
+    private var connectionAnimationTimer: Timer?
 
     init(store: BridgeSettingsStore = BridgeSettingsStore()) {
         self.store = store
@@ -54,7 +59,7 @@ private final class MenuBarModel: ObservableObject {
             message = "Could not read the pairing secret from Keychain: \(error.localizedDescription)"
         }
         sender.statusChanged = { [weak self] mode in
-            self?.status = SenderStatus(mode: mode)
+            self?.setStatus(SenderStatus(mode: mode))
         }
         sender.connectionFailed = { [weak self] in
             self?.message = "Connection was not established. Check the Steam Deck address, pairing secret, and that Mac input is enabled on the Deck."
@@ -124,6 +129,39 @@ private final class MenuBarModel: ObservableObject {
     func stop() {
         sender.stop()
         started = false
+    }
+
+    private func setStatus(_ newStatus: SenderStatus) {
+        status = newStatus
+        if newStatus == .connecting {
+            startConnectionAnimation()
+        } else {
+            stopConnectionAnimation()
+        }
+    }
+
+    private func startConnectionAnimation() {
+        guard connectionAnimationTimer == nil else { return }
+        connectionAnimationPhase = 0
+        connectionAnimationTimer = Timer.scheduledTimer(withTimeInterval: 0.32, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.advanceConnectionAnimation()
+            }
+        }
+    }
+
+    private func advanceConnectionAnimation() {
+        connectionAnimationPhase = (connectionAnimationPhase + 1) % MenuBarDeckIcon.connectingFrameCount
+    }
+
+    private func stopConnectionAnimation() {
+        connectionAnimationTimer?.invalidate()
+        connectionAnimationTimer = nil
+        connectionAnimationPhase = 0
+    }
+
+    deinit {
+        connectionAnimationTimer?.invalidate()
     }
 
     private func startIfNeeded() throws {
