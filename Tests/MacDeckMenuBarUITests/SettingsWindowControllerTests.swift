@@ -24,7 +24,7 @@ final class SettingsWindowControllerTests: XCTestCase {
         editor.insertText("192.168.1.42", replacementRange: NSRange(location: 0, length: 0))
         XCTAssertEqual(controller.hostField.stringValue, "192.168.1.42")
         window.close()
-        XCTAssertEqual(NSApp.activationPolicy(), .accessory)
+        XCTAssertEqual(NSApp.activationPolicy(), .regular)
     }
 
     func testPairingFieldAcceptsPasteAndSaveUsesEnteredValues() throws {
@@ -131,6 +131,69 @@ final class SettingsWindowControllerTests: XCTestCase {
             MenuBarPresentation.primaryAction(status: .remote, host: "deck", pairingSecret: "secret"),
             .returnToMac
         )
+    }
+
+    func testDockCanStayHiddenWhileSettingsIsOpenAndAfterClose() throws {
+        let controller = SettingsWindowController()
+        controller.show(
+            draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "secret", showInDock: false)
+        ) { _ in nil }
+        let window = try XCTUnwrap(controller.window)
+        drainMainQueue()
+
+        XCTAssertEqual(controller.showInDockCheckbox.state, .off)
+        XCTAssertEqual(NSApp.activationPolicy(), .accessory)
+        XCTAssertTrue(window.isVisible)
+        XCTAssertTrue(
+            window.firstResponder === controller.hostField || window.firstResponder is NSTextView,
+            "An accessory app must still direct input into Settings."
+        )
+        window.close()
+        XCTAssertEqual(NSApp.activationPolicy(), .accessory)
+    }
+
+    func testSavingDockChoiceDeliversTheUserSelection() throws {
+        let controller = SettingsWindowController()
+        var saved: SettingsDraft?
+        controller.show(
+            draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "secret", showInDock: true)
+        ) {
+            saved = $0
+            return nil
+        }
+        let window = try XCTUnwrap(controller.window)
+        drainMainQueue()
+
+        controller.showInDockCheckbox.state = .off
+        controller.saveButton.performClick(nil)
+        XCTAssertEqual(saved?.showInDock, false)
+        XCTAssertFalse(window.isVisible)
+        XCTAssertEqual(NSApp.activationPolicy(), .accessory)
+    }
+
+    func testDockVisibilityPreferenceDefaultsToShownAndPersistsChoice() {
+        let suite = "MacDeckMenuBarUITests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        XCTAssertTrue(DockVisibilityPreference.load(from: defaults))
+        DockVisibilityPreference.save(showInDock: false, to: defaults)
+        XCTAssertFalse(DockVisibilityPreference.load(from: defaults))
+    }
+
+    func testMenuBarDeckIconIsTemplateAccessibleAndExposesEveryConnectionState() {
+        let expectedDescriptions: [(MenuBarStatus, String)] = [
+            (.local, "Steam Deck keyboard input, ABC, local"),
+            (.connecting, "Steam Deck keyboard input, ABC, connecting"),
+            (.remote, "Steam Deck keyboard input, ABC, sending to Steam Deck")
+        ]
+        for (status, description) in expectedDescriptions {
+            let image = MenuBarDeckIcon.image(for: status)
+            XCTAssertTrue(image.isTemplate)
+            XCTAssertEqual(image.accessibilityDescription, description)
+            XCTAssertGreaterThan(image.size.width, 0)
+            XCTAssertGreaterThan(image.size.height, 0)
+        }
     }
 
     private func drainMainQueue() {
