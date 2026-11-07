@@ -4,11 +4,13 @@ public struct SettingsDraft: Equatable {
     public var host: String
     public var port: String
     public var pairingSecret: String
+    public var showInDock: Bool
 
-    public init(host: String, port: String, pairingSecret: String) {
+    public init(host: String, port: String, pairingSecret: String, showInDock: Bool = true) {
         self.host = host
         self.port = port
         self.pairingSecret = pairingSecret
+        self.showInDock = showInDock
     }
 }
 
@@ -21,6 +23,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     public let hostField = NSTextField(string: "")
     public let portField = NSTextField(string: "")
     public let pairingSecretField = NSSecureTextField(string: "")
+    public let showInDockCheckbox = NSButton(checkboxWithTitle: "Show MacDeckInputBridge in Dock", target: nil, action: nil)
     public let messageLabel = NSTextField(wrappingLabelWithString: "")
     public let saveButton = NSButton(title: "Save", target: nil, action: nil)
 
@@ -52,13 +55,13 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         hostField.stringValue = draft.host
         portField.stringValue = draft.port
         pairingSecretField.stringValue = draft.pairingSecret
+        showInDockCheckbox.state = draft.showInDock ? .on : .off
         messageLabel.stringValue = notice ?? ""
 
-        // A bare Swift Package executable is launched by Terminal, which remains
-        // frontmost unless this process explicitly becomes a regular app. Without
-        // this transition AppKit can draw a caret while Terminal still receives
-        // the physical keyboard events.
-        NSApp.setActivationPolicy(.regular)
+        // Accessory applications may still activate a window programmatically.
+        // Keeping this in sync with the saved Dock choice avoids a Dock icon
+        // briefly appearing only while Settings is open.
+        DockVisibilityPreference.apply(showInDock: draft.showInDock)
         NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
@@ -69,7 +72,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         window.orderFrontRegardless()
         DispatchQueue.main.async { [weak self, weak window] in
             guard let self, let window else { return }
-            NSApp.setActivationPolicy(.regular)
+            DockVisibilityPreference.apply(showInDock: draft.showInDock)
             NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
@@ -78,23 +81,22 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     }
 
     public func windowWillClose(_ notification: Notification) {
-        // Return to a menu-bar-only presence once no editable Settings window is
-        // displayed. This preserves the expected no-Dock-icon behavior.
         onSave = nil
-        NSApp.setActivationPolicy(.accessory)
     }
 
     @objc private func save(_ sender: Any?) {
         let draft = SettingsDraft(
             host: hostField.stringValue,
             port: portField.stringValue,
-            pairingSecret: pairingSecretField.stringValue
+            pairingSecret: pairingSecretField.stringValue,
+            showInDock: showInDockCheckbox.state == .on
         )
         if let error = onSave?(draft) {
             messageLabel.stringValue = error
             return
         }
         close()
+        DockVisibilityPreference.apply(showInDock: draft.showInDock)
     }
 
     private func buildContent(in window: NSWindow) {
@@ -136,6 +138,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             pairingTitle,
             fieldRow("Pairing secret", pairingSecretField),
             guidance,
+            showInDockCheckbox,
             messageLabel,
             buttonRow(saveButton)
         ])
