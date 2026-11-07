@@ -42,10 +42,18 @@ fi
 
 mkdir -p "$applications_root"
 sed -e "s|@MAC_DECK_RECEIVER_UI@|$bin_root/mac-deck-receiver-ui|" \
-  -e "s|@MAC_DECK_ICON@|$installed_icon|" \
   "$receiver_root/resources/mac-deck-input-bridge.desktop" \
   > "$applications_root/mac-deck-input-bridge.desktop"
 chmod 644 "$applications_root/mac-deck-input-bridge.desktop"
+
+# Plasma 5 on SteamOS can ignore icons copied into a user theme until they are
+# registered as an application resource. xdg-icon-resource handles the correct
+# user data directory and cache format for both older Plasma and current KDE.
+if command -v xdg-icon-resource >/dev/null 2>&1; then
+  xdg-icon-resource install --mode user --context apps --size 1024 \
+    "$installed_icon" mac-deck-input-bridge >/dev/null 2>&1 || true
+  xdg-icon-resource forceupdate --mode user >/dev/null 2>&1 || true
+fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$applications_root" >/dev/null 2>&1 || true
