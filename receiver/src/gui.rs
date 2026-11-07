@@ -10,6 +10,7 @@ use std::{
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    time::{Duration, Instant},
 };
 
 const APP_NAME: &str = "MacDeckInputBridge Receiver";
@@ -87,17 +88,43 @@ impl ReceiverProcess {
         match child.try_wait() {
             Ok(Some(_)) => Ok(()),
             Ok(None) => {
-                child
-                    .kill()
-                    .map_err(|error| format!("Could not stop receiver: {error}"))?;
-                child
-                    .wait()
-                    .map(|_| ())
-                    .map_err(|error| format!("Could not wait for receiver shutdown: {error}"))
+                request_graceful_shutdown(&mut child)?;
+                Ok(())
             }
             Err(error) => Err(format!("Could not inspect receiver: {error}")),
         }
     }
+}
+
+fn request_graceful_shutdown(child: &mut Child) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let status = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+        if status == -1 {
+            return Err(format!(
+                "Could not request receiver shutdown: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+                Err(error) => return Err(format!("Could not inspect receiver shutdown: {error}")),
+            }
+        }
+    }
+
+    // A damaged or older receiver binary might not handle SIGTERM. Keep a short,
+    // bounded fallback so disabling input cannot leave an unresponsive child alive.
+    child
+        .kill()
+        .map_err(|error| format!("Could not force-stop receiver: {error}"))?;
+    child
+        .wait()
+        .map(|_| ())
+        .map_err(|error| format!("Could not wait for receiver shutdown: {error}"))
 }
 
 impl Drop for ReceiverProcess {
