@@ -25,8 +25,6 @@ public enum MenuBarPrimaryAction: Equatable, Sendable {
 }
 
 public enum MenuBarPresentation {
-    public static let attentionTitle = "Needs attention — open Settings…"
-
     public static func primaryAction(
         status: MenuBarStatus,
         host: String,
