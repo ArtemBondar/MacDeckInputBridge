@@ -149,6 +149,19 @@ impl ReceiverApp {
             .map_err(|error| format!("Could not save settings: {error}"))
     }
 
+    fn apply_settings(&mut self) -> Result<(), String> {
+        if self.process.is_running() {
+            // The receiver receives its settings only at process launch. Restart
+            // it so the visible pairing secret and bind address are always the
+            // values protecting the active listener.
+            self.process.stop()?;
+            self.save_settings()?;
+            self.process.start(&self.settings)
+        } else {
+            self.save_settings()
+        }
+    }
+
     fn toggle_receiver(&mut self) {
         let result = if self.process.is_running() {
             self.process.stop()
@@ -196,7 +209,10 @@ impl ReceiverApp {
         ui.text_edit_singleline(&mut self.settings.pairing_secret);
         ui.horizontal(|ui| {
             if ui.button("Save settings").clicked() {
-                self.status = self.save_settings().err();
+                self.status = match self.apply_settings() {
+                    Ok(()) => Some("Settings saved.".to_owned()),
+                    Err(error) => Some(error),
+                };
             }
             if ui.button("Copy secret").clicked() {
                 context.copy_text(self.settings.pairing_secret.clone());
@@ -411,6 +427,23 @@ mod tests {
                 0o600
             );
         }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn apply_settings_persists_when_receiver_is_disabled() {
+        let directory = unique_test_directory("apply-settings");
+        let path = directory.join(CONFIG_FILE);
+        let mut app = ReceiverApp {
+            settings: ReceiverSettings::default(),
+            settings_path: path.clone(),
+            process: ReceiverProcess { child: None },
+            selected_tab: Tab::Settings,
+            status: None,
+        };
+        app.settings.bind = "127.0.0.1:4343".to_owned();
+        app.apply_settings().unwrap();
+        assert_eq!(load_settings(&path).unwrap().bind, "127.0.0.1:4343");
         fs::remove_dir_all(directory).unwrap();
     }
 
