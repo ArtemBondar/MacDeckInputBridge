@@ -191,7 +191,7 @@ final class SettingsWindowControllerTests: XCTestCase {
             let image = MenuBarDeckIcon.image(for: status)
             XCTAssertTrue(image.isTemplate)
             XCTAssertEqual(image.accessibilityDescription, description)
-            XCTAssertGreaterThan(image.size.width, 0)
+            XCTAssertEqual(image.size.width, 36)
             XCTAssertGreaterThan(image.size.height, 0)
         }
 
