@@ -107,7 +107,13 @@ private final class MenuBarModel: ObservableObject {
             started = false
         }
         SettingsWindowController.shared.show(
-            draft: SettingsDraft(host: host, port: port, pairingSecret: pairingSecret, showInDock: showInDock),
+            draft: SettingsDraft(
+                host: host,
+                port: port,
+                pairingSecret: pairingSecret,
+                showInDock: showInDock,
+                currentInputSourceID: SenderController.currentKeyboardLayoutIdentifier()
+            ),
             notice: message
         ) { draft in
             self.saveSettings(draft)
