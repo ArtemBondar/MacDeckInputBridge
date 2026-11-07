@@ -413,7 +413,9 @@ fn serve(
                 }));
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(20));
+                // Keep shutdown responsive without spinning the CPU fifty
+                // times per second while the receiver is idle.
+                thread::sleep(Duration::from_millis(200));
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error),
