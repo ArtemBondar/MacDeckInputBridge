@@ -6,11 +6,10 @@ import AppKit
 public enum MenuBarDeckIcon {
     /// Empty screen, then one, two, and three dots.
     public static let connectingFrameCount = 4
-    public static let scale: CGFloat = 0.8
+    public static let scale: CGFloat = 1.0
 
     public static func image(for status: MenuBarStatus, connectingPhase: Int = 0) -> NSImage {
-        // Keep the proportions of the 36 × 20 vector design while reducing its
-        // menu-bar footprint by 20% to sit alongside standard status items.
+        // Render the native 36 × 20 vector size for maximum menu-bar legibility.
         let size = NSSize(width: 36 * scale, height: 20 * scale)
         let image = NSImage(size: size, flipped: false) { _ in
             let transform = NSAffineTransform()
