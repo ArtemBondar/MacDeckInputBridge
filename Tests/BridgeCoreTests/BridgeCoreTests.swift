@@ -3,6 +3,34 @@ import XCTest
 
 final class BridgeCoreTests: XCTestCase {
     private let pairing = try! PairingSecret(base64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+    private let expectedMappings: [UInt16: UInt16] = [
+        0: 30, 1: 31, 2: 32, 3: 33, 4: 35, 5: 34, 6: 44, 7: 45, 8: 46, 9: 47,
+        10: 86, 11: 48, 12: 16, 13: 17, 14: 18, 15: 19, 16: 21, 17: 20, 18: 2,
+        19: 3, 20: 4, 21: 5, 22: 7, 23: 6, 24: 13, 25: 10, 26: 8, 27: 12,
+        28: 9, 29: 11, 30: 26, 31: 27, 32: 43, 33: 39, 34: 40, 35: 41, 36: 28,
+        37: 38, 38: 36, 39: 37, 40: 52, 41: 53, 42: 51, 43: 49, 44: 24, 45: 25,
+        46: 23, 47: 22, 48: 15, 49: 57, 50: 41, 51: 14, 53: 1, 54: 126, 55: 125,
+        56: 42, 57: 58, 58: 56, 59: 29, 60: 54, 61: 100, 62: 97, 64: 187, 65: 83,
+        67: 55, 69: 78, 71: 69, 72: 115, 73: 114, 74: 113, 75: 98, 76: 96,
+        78: 74, 79: 188, 80: 189, 81: 117, 82: 82, 83: 79, 84: 80, 85: 81,
+        86: 75, 87: 76, 88: 77, 89: 71, 90: 190, 91: 89, 92: 90, 96: 63, 97: 64,
+        98: 65, 99: 61, 100: 66, 101: 67, 103: 87, 105: 183, 106: 186, 107: 184,
+        109: 68, 110: 127, 111: 88, 113: 185, 114: 110, 115: 102, 116: 104,
+        117: 111, 118: 62, 119: 107, 120: 60, 121: 109, 122: 59, 123: 105,
+        124: 106, 125: 108, 126: 103
+    ]
+
+    private func remoteMachine() -> InputStateMachine {
+        var machine = InputStateMachine()
+        _ = machine.handle(CapturedKeyEvent(kind: .flagsChanged, keyCode: 59, modifiers: [.control]))
+        _ = machine.handle(CapturedKeyEvent(kind: .flagsChanged, keyCode: 56, modifiers: [.control, .shift]))
+        _ = machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.control, .shift]))
+        machine.connectionReady()
+        _ = machine.handle(CapturedKeyEvent(kind: .keyUp, keyCode: 111))
+        _ = machine.handle(CapturedKeyEvent(kind: .flagsChanged, keyCode: 56, modifiers: [.control]))
+        _ = machine.handle(CapturedKeyEvent(kind: .flagsChanged, keyCode: 59))
+        return machine
+    }
 
     func testPacketRoundTripThroughAuthenticatedFrame() throws {
         let framer = SecureFramer(pairing: pairing)
@@ -10,6 +38,14 @@ final class BridgeCoreTests: XCTestCase {
         var decoder = FrameDecoder()
         let encrypted = try XCTUnwrap(decoder.append(frame).first)
         XCTAssertEqual(try framer.open(combined: encrypted), .key(code: 30, value: 1))
+    }
+
+    func testDecryptsRustChaChaPolyFixture() throws {
+        let combined = Data(hexadecimal: "0000000000000000000000009e07f9bf24604abcc6cbb670b4ca01b0ca60a51d")
+        XCTAssertEqual(
+            try SecureFramer(pairing: pairing).open(combined: combined),
+            .key(code: 30, value: 1)
+        )
     }
 
     func testDecoderHandlesFragmentedAndCoalescedFrames() throws {
@@ -24,10 +60,28 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(try framer.open(combined: frames[1]), .releaseAll)
     }
 
+    func testFramingWorksAtEveryTCPFragmentBoundary() throws {
+        let framer = SecureFramer(pairing: pairing)
+        let frame = try framer.seal(.key(code: 30, value: 1))
+        for splitIndex in 0...frame.count {
+            var decoder = FrameDecoder()
+            let firstFrames = try decoder.append(frame.prefix(splitIndex))
+            let secondFrames = try decoder.append(frame.dropFirst(splitIndex))
+            let frames = firstFrames + secondFrames
+            let encrypted = try XCTUnwrap(frames.first)
+            XCTAssertEqual(frames.count, 1)
+            XCTAssertEqual(try framer.open(combined: encrypted), .key(code: 30, value: 1))
+        }
+    }
+
+    func testInvalidPacketsAreRejected() {
+        XCTAssertNil(BridgePacket(encoded: Data()))
+        XCTAssertNil(BridgePacket(encoded: Data([1, 0, 30, 3])))
+        XCTAssertNil(BridgePacket(encoded: Data([9])))
+    }
+
     func testPhysicalKeyMapping() {
-        XCTAssertEqual(KeyMapping.linuxCode(for: 0), 30) // A
-        XCTAssertEqual(KeyMapping.linuxCode(for: 111), 88) // F12
-        XCTAssertEqual(KeyMapping.linuxCode(for: 59), 29) // left control
+        XCTAssertEqual(KeyMapping.supportedMappings, expectedMappings)
         XCTAssertNil(KeyMapping.linuxCode(for: 999))
     }
 
@@ -41,6 +95,27 @@ final class BridgeCoreTests: XCTestCase {
         }
     }
 
+    func testEveryMappedKeyForwardsDownUpAndRepeat() {
+        for (macKeyCode, linuxCode) in expectedMappings {
+            var machine = remoteMachine()
+            XCTAssertEqual(
+                machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: macKeyCode)),
+                [.suppress(.key(code: linuxCode, value: 1))],
+                "down for macOS keycode \(macKeyCode)"
+            )
+            XCTAssertEqual(
+                machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: macKeyCode, isRepeat: true)),
+                [.suppress(.key(code: linuxCode, value: 2))],
+                "repeat for macOS keycode \(macKeyCode)"
+            )
+            XCTAssertEqual(
+                machine.handle(CapturedKeyEvent(kind: .keyUp, keyCode: macKeyCode)),
+                [.suppress(.key(code: linuxCode, value: 0))],
+                "up for macOS keycode \(macKeyCode)"
+            )
+        }
+    }
+
     func testConnectingNeverSuppressesAndRemoteToggleFailsSafe() {
         var machine = InputStateMachine()
         let hotkey = CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.control, .shift])
@@ -51,6 +126,29 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 0)), [.suppress(.key(code: 30, value: 1))])
         XCTAssertEqual(machine.handle(hotkey), [.passThrough, .releaseAndDisconnect])
         XCTAssertEqual(machine.mode, .local)
+    }
+
+    func testSecondHotkeyCancelsConnecting() {
+        var machine = InputStateMachine()
+        let hotkey = CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.control, .shift])
+        XCTAssertEqual(machine.handle(hotkey), [.passThrough, .beginConnection])
+        XCTAssertEqual(machine.handle(hotkey), [.passThrough, .releaseAndDisconnect])
+        XCTAssertEqual(machine.mode, .local)
+    }
+
+    func testPartialAndRepeatedHotkeysStayLocal() {
+        var machine = InputStateMachine()
+        XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.control])), [.passThrough])
+        XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.shift])), [.passThrough])
+        XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.control, .shift], isRepeat: true)), [.passThrough])
+        XCTAssertEqual(machine.mode, .local)
+    }
+
+    func testConnectionLossAlwaysReturnsToLocal() {
+        var machine = remoteMachine()
+        machine.connectionLost()
+        XCTAssertEqual(machine.mode, .local)
+        XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 0)), [.passThrough])
     }
 
     func testHotkeyNeverBecomesForwardedKey() {
@@ -89,5 +187,58 @@ final class BridgeCoreTests: XCTestCase {
         _ = machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.control, .shift]))
         machine.connectionReady()
         XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .flagsChanged, keyCode: 58, modifiers: [.option])), [.suppress(.key(code: 56, value: 1))])
+    }
+
+    func testEveryModifierFlagsTransitionForwardsCorrectState() {
+        let modifiers: [(UInt16, ModifierState, UInt16)] = [
+            (54, .command, 126), (55, .command, 125), (56, .shift, 42), (57, .capsLock, 58),
+            (58, .option, 56), (59, .control, 29), (60, .shift, 54), (61, .option, 100),
+            (62, .control, 97)
+        ]
+        for (macKeyCode, flag, linuxCode) in modifiers {
+            var machine = remoteMachine()
+            XCTAssertEqual(
+                machine.handle(CapturedKeyEvent(kind: .flagsChanged, keyCode: macKeyCode, modifiers: [flag])),
+                [.suppress(.key(code: linuxCode, value: 1))],
+                "down for modifier \(macKeyCode)"
+            )
+            XCTAssertEqual(
+                machine.handle(CapturedKeyEvent(kind: .flagsChanged, keyCode: macKeyCode)),
+                [.suppress(.key(code: linuxCode, value: 0))],
+                "up for modifier \(macKeyCode)"
+            )
+        }
+    }
+
+    func testOrdinaryKeyForwardsUnderEveryModifierCombination() {
+        let flags: [ModifierState] = [.control, .shift, .command, .option, .capsLock]
+        for rawValue in 0..<(1 << flags.count) {
+            let modifiers = flags.enumerated().reduce(into: ModifierState()) { result, item in
+                if rawValue & (1 << item.offset) != 0 { result.insert(item.element) }
+            }
+            var machine = remoteMachine()
+            XCTAssertEqual(
+                machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 0, modifiers: modifiers)),
+                [.suppress(.key(code: 30, value: 1))],
+                "modifier mask \(rawValue)"
+            )
+            XCTAssertEqual(
+                machine.handle(CapturedKeyEvent(kind: .keyUp, keyCode: 0, modifiers: modifiers)),
+                [.suppress(.key(code: 30, value: 0))],
+                "modifier mask \(rawValue)"
+            )
+        }
+    }
+}
+
+private extension Data {
+    init(hexadecimal: String) {
+        precondition(hexadecimal.count.isMultiple(of: 2))
+        self.init((0..<hexadecimal.count).compactMap { offset in
+            guard offset.isMultiple(of: 2) else { return nil }
+            let start = hexadecimal.index(hexadecimal.startIndex, offsetBy: offset)
+            let end = hexadecimal.index(start, offsetBy: 2)
+            return UInt8(hexadecimal[start..<end], radix: 16)
+        })
     }
 }
