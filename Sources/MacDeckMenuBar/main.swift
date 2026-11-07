@@ -88,8 +88,8 @@ private final class MenuBarModel: ObservableObject {
         }
         SettingsWindowController.shared.show(
             draft: SettingsDraft(host: host, port: port, pairingSecret: pairingSecret)
-        ) { [weak self] draft in
-            self?.saveSettings(draft) ?? "The application is no longer available."
+        ) { draft in
+            self.saveSettings(draft)
         }
     }
 
