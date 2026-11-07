@@ -148,6 +148,10 @@ struct ConfiguredLayout {
     description: String,
 }
 
+const PLASMA_KEYBOARD_LAYOUT_SERVICE: &str = "org.kde.keyboard";
+const PLASMA_KEYBOARD_LAYOUT_PATH: &str = "/Layouts";
+const PLASMA_KEYBOARD_LAYOUT_METHOD: &str = "org.kde.KeyboardLayouts.setLayout";
+
 impl PlasmaLayoutSwitcher {
     fn new(mappings: &[String]) -> Result<Self, String> {
         let qdbus = ["/usr/bin/qdbus6", "/usr/bin/qdbus"]
@@ -193,9 +197,9 @@ impl PlasmaLayoutSwitcher {
         let index = index.to_string();
         let status = ProcessCommand::new(&self.qdbus)
             .args([
-                "org.kde.KWin",
-                "/Layouts",
-                "org.kde.KeyboardLayouts.setLayout",
+                PLASMA_KEYBOARD_LAYOUT_SERVICE,
+                PLASMA_KEYBOARD_LAYOUT_PATH,
+                PLASMA_KEYBOARD_LAYOUT_METHOD,
                 &index,
             ])
             .status()?;
@@ -842,6 +846,16 @@ mod receiver_tests {
         assert_eq!(
             automatic_layout_index("com.apple.keylayout.US", &ambiguous),
             None
+        );
+    }
+
+    #[test]
+    fn plasma_layout_switch_uses_the_keyboard_layouts_dbus_service() {
+        assert_eq!(PLASMA_KEYBOARD_LAYOUT_SERVICE, "org.kde.keyboard");
+        assert_eq!(PLASMA_KEYBOARD_LAYOUT_PATH, "/Layouts");
+        assert_eq!(
+            PLASMA_KEYBOARD_LAYOUT_METHOD,
+            "org.kde.KeyboardLayouts.setLayout"
         );
     }
 }
