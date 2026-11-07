@@ -110,7 +110,7 @@ final class SettingsWindowControllerTests: XCTestCase {
     }
 
     func testEveryMenuBarPrimaryActionStateHasAnExplicitLabel() {
-        XCTAssertEqual(MenuBarPresentation.attentionTitle, "Needs attention — open Settings…")
+        XCTAssertEqual(MenuBarPrimaryAction.configure.title, "Configure Steam Deck…")
         XCTAssertEqual(
             MenuBarPresentation.primaryAction(status: .local, host: "", pairingSecret: "secret"),
             .configure
