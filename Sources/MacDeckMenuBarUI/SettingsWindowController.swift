@@ -50,6 +50,12 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         pairingSecretField.stringValue = draft.pairingSecret
         messageLabel.stringValue = ""
 
+        // A bare Swift Package executable is launched by Terminal, which remains
+        // frontmost unless this process explicitly becomes a regular app. Without
+        // this transition AppKit can draw a caret while Terminal still receives
+        // the physical keyboard events.
+        NSApp.setActivationPolicy(.regular)
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         guard let window else { return }
@@ -59,10 +65,18 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         window.orderFrontRegardless()
         DispatchQueue.main.async { [weak self, weak window] in
             guard let self, let window else { return }
+            NSApp.setActivationPolicy(.regular)
+            NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             window.makeFirstResponder(self.hostField)
         }
+    }
+
+    public func windowWillClose(_ notification: Notification) {
+        // Return to a menu-bar-only presence once no editable Settings window is
+        // displayed. This preserves the expected no-Dock-icon behavior.
+        NSApp.setActivationPolicy(.accessory)
     }
 
     @objc private func save(_ sender: Any?) {
