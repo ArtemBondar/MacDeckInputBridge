@@ -36,7 +36,12 @@ private final class MenuBarModel: ObservableObject {
         let settings = store.loadSettings()
         host = settings.host
         port = String(settings.port)
-        pairingSecret = (try? store.loadPairingSecret()) ?? ""
+        do {
+            pairingSecret = try store.loadPairingSecret() ?? ""
+        } catch {
+            pairingSecret = ""
+            message = "Could not read the pairing secret from Keychain: \(error.localizedDescription)"
+        }
         sender.statusChanged = { [weak self] mode in
             self?.status = SenderStatus(mode: mode)
         }
