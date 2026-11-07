@@ -1,10 +1,16 @@
 use clap::{Parser, Subcommand};
-use mac_deck_receiver::{BridgeError, Packet, PairingSecret, SecureFramer};
+use mac_deck_receiver::{
+    derive_session_secret, generate_challenge, write_server_hello, BridgeError, Packet,
+    PairingSecret, SessionFramer,
+};
 use std::{
     io,
     net::{Shutdown, TcpListener, TcpStream},
     process::ExitCode,
+    time::Duration,
 };
+
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Parser)]
 #[command(about = "Encrypted Mac keyboard receiver for SteamOS Desktop Mode")]
@@ -33,18 +39,82 @@ trait KeySink {
 
 fn handle_client(
     stream: &mut TcpStream,
-    framer: &SecureFramer,
+    pairing_secret: &PairingSecret,
     sink: &mut impl KeySink,
 ) -> Result<(), BridgeError> {
+    // A peer must prove possession of the pairing secret within a bounded time
+    // before it can occupy the receiver. The challenge derives a fresh session
+    // key, so an authenticated frame captured on an old connection cannot replay.
+    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
+    stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
+    let challenge = generate_challenge();
+    write_server_hello(stream, &challenge)?;
+    let session = SessionFramer::new(derive_session_secret(pairing_secret, &challenge));
+    let (sequence, packet) = session.read_packet(stream)?;
+    if sequence != 0 || packet != Packet::ClientReady {
+        return Err(BridgeError::Handshake);
+    }
+    session.write_packet(stream, 0, &Packet::ServerReady)?;
+    stream.set_read_timeout(None)?;
+    stream.set_write_timeout(None)?;
+
+    let mut next_sequence = 1u64;
     loop {
-        match framer.read_packet(stream) {
-            Ok(Packet::Key { code, value }) => sink.emit(code, value as i32)?,
-            Ok(Packet::ReleaseAll) => sink.release_all()?,
-            Ok(Packet::Ping) => {}
-            // The peer may vanish mid-frame. The caller always releases held keys.
-            Err(error) => return Err(error),
+        let (sequence, packet) = session.read_packet(stream)?;
+        expect_next_sequence(&mut next_sequence, sequence)?;
+        match packet {
+            Packet::Key { code, value } if is_supported_key(code) => {
+                sink.emit(code, value as i32)?
+            }
+            Packet::Key { .. } | Packet::ClientReady | Packet::ServerReady => {
+                return Err(BridgeError::InvalidPacket)
+            }
+            Packet::ReleaseAll => sink.release_all()?,
+            Packet::Ping => {}
         }
     }
+}
+
+fn expect_next_sequence(expected: &mut u64, received: u64) -> Result<(), BridgeError> {
+    if received != *expected {
+        return Err(BridgeError::Handshake);
+    }
+    *expected = expected.checked_add(1).ok_or(BridgeError::Handshake)?;
+    Ok(())
+}
+
+/// The receiver accepts only codes that its uinput device explicitly advertises.
+/// This keeps an authenticated sender within the least-privilege key surface.
+fn is_supported_key(code: u16) -> bool {
+    (1..=69).contains(&code)
+        || (71..=83).contains(&code)
+        || matches!(
+            code,
+            86 | 87
+                | 88
+                | 96
+                | 97
+                | 98
+                | 100
+                | 102
+                | 103
+                | 104
+                | 105
+                | 106
+                | 107
+                | 108
+                | 109
+                | 110
+                | 111
+                | 113
+                | 114
+                | 115
+                | 117
+                | 125
+                | 126
+                | 127
+                | 183..=190
+        )
 }
 
 #[cfg(target_os = "linux")]
@@ -194,14 +264,9 @@ mod uinput {
     fn supported_keys() -> Vec<u16> {
         // Matches Sources/BridgeCore/KeyMapping.swift and intentionally omits
         // capabilities that the sender cannot emit.
-        let mut keys: Vec<u16> = (1..=69).collect();
-        keys.extend(71..=83);
-        keys.extend([
-            86, 87, 88, 96, 97, 98, 100, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 113,
-            114, 115, 117, 125, 126, 127,
-        ]);
-        keys.extend(183..=190);
-        keys
+        (1..=190)
+            .filter(|code| super::is_supported_key(*code))
+            .collect()
     }
 
     #[cfg(test)]
@@ -248,13 +313,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             bind,
             pairing_secret,
         } => {
-            let framer = SecureFramer::new(PairingSecret::parse(&pairing_secret)?);
+            let pairing_secret = PairingSecret::parse(&pairing_secret)?;
             let listener = TcpListener::bind(&bind)?;
             let mut sink = uinput::UinputSink::open()?;
             eprintln!("Listening on {bind}; keyboard event contents are not logged.");
             for connection in listener.incoming() {
                 let mut stream = connection?;
-                let _ = handle_client(&mut stream, &framer, &mut sink);
+                let _ = handle_client(&mut stream, &pairing_secret, &mut sink);
                 let _ = sink.release_all();
                 let _ = stream.shutdown(Shutdown::Both);
             }
@@ -302,5 +367,63 @@ mod receiver_tests {
         sink.emit(42, 1).unwrap();
         sink.release_all().unwrap();
         assert!(sink.held.is_empty());
+    }
+
+    #[test]
+    fn receiver_whitelist_rejects_unadvertised_codes() {
+        assert!(is_supported_key(30));
+        assert!(is_supported_key(190));
+        assert!(!is_supported_key(0));
+        assert!(!is_supported_key(70));
+        assert!(!is_supported_key(191));
+    }
+
+    #[test]
+    fn application_sequence_rejects_replay_and_reordering() {
+        let mut expected = 1;
+        expect_next_sequence(&mut expected, 1).unwrap();
+        assert_eq!(expected, 2);
+        assert!(matches!(
+            expect_next_sequence(&mut expected, 1),
+            Err(BridgeError::Handshake)
+        ));
+        assert!(matches!(
+            expect_next_sequence(&mut expected, 3),
+            Err(BridgeError::Handshake)
+        ));
+    }
+
+    #[test]
+    fn handshake_requires_ready_and_rejects_replayed_application_record() {
+        let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_pairing = pairing.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut sink = TestSink::default();
+            handle_client(&mut stream, &server_pairing, &mut sink)
+        });
+
+        let mut client = TcpStream::connect(address).unwrap();
+        let challenge = mac_deck_receiver::read_server_hello(&mut client).unwrap();
+        let session = SessionFramer::new(derive_session_secret(&pairing, &challenge));
+        session
+            .write_packet(&mut client, 0, &Packet::ClientReady)
+            .unwrap();
+        assert_eq!(
+            session.read_packet(&mut client).unwrap(),
+            (0, Packet::ServerReady)
+        );
+        session
+            .write_packet(&mut client, 1, &Packet::Key { code: 30, value: 1 })
+            .unwrap();
+        session
+            .write_packet(&mut client, 1, &Packet::Key { code: 30, value: 1 })
+            .unwrap();
+        assert!(matches!(
+            server.join().unwrap(),
+            Err(BridgeError::Handshake)
+        ));
     }
 }
