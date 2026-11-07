@@ -185,4 +185,27 @@ mod tests {
             Err(BridgeError::Authentication)
         ));
     }
+
+    #[test]
+    fn decrypts_deterministic_swift_interop_fixture() {
+        let key = [0u8; 32];
+        let nonce = [0u8; 12];
+        let cipher = ChaCha20Poly1305::new((&key).into());
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Packet::Key { code: 30, value: 1 }.encode().as_ref(),
+            )
+            .unwrap();
+        assert_eq!(
+            hex::encode(&ciphertext),
+            "9e07f9bf24604abcc6cbb670b4ca01b0ca60a51d"
+        );
+        let mut combined = nonce.to_vec();
+        combined.extend(ciphertext);
+        assert_eq!(
+            SecureFramer::new(secret()).open(&combined).unwrap(),
+            Packet::Key { code: 30, value: 1 }
+        );
+    }
 }
