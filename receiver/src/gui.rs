@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, RichText};
-use get_if_addrs::{get_if_addrs, IfAddr};
+use get_if_addrs::{get_if_addrs, IfAddr, Interface};
 use mac_deck_receiver::PairingSecret;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -50,7 +50,15 @@ struct ReceiverProcess {
     child: Option<Child>,
 }
 
-impl ReceiverProcess {
+trait ReceiverSupervisor {
+    fn is_running(&mut self) -> bool {
+        false
+    }
+    fn start(&mut self, settings: &ReceiverSettings) -> Result<(), String>;
+    fn stop(&mut self) -> Result<(), String>;
+}
+
+impl ReceiverSupervisor for ReceiverProcess {
     fn is_running(&mut self) -> bool {
         match self.child.as_mut().map(Child::try_wait) {
             Some(Ok(None)) => true,
@@ -133,10 +141,10 @@ impl Drop for ReceiverProcess {
     }
 }
 
-struct ReceiverApp {
+struct ReceiverApp<P = ReceiverProcess> {
     settings: ReceiverSettings,
     settings_path: PathBuf,
-    process: ReceiverProcess,
+    process: P,
     selected_tab: Tab,
     status: Option<String>,
 }
@@ -147,7 +155,7 @@ enum Tab {
     Settings,
 }
 
-impl ReceiverApp {
+impl ReceiverApp<ReceiverProcess> {
     fn new() -> Self {
         let settings_path = settings_path();
         let (settings, status) = match load_settings(&settings_path) {
@@ -168,6 +176,19 @@ impl ReceiverApp {
             process: ReceiverProcess { child: None },
             selected_tab: Tab::Control,
             status,
+        }
+    }
+}
+
+impl<P: ReceiverSupervisor> ReceiverApp<P> {
+    #[cfg(test)]
+    fn with_process(settings: ReceiverSettings, settings_path: PathBuf, process: P) -> Self {
+        Self {
+            settings,
+            settings_path,
+            process,
+            selected_tab: Tab::Control,
+            status: None,
         }
     }
 
@@ -197,6 +218,14 @@ impl ReceiverApp {
                 .and_then(|()| self.process.start(&self.settings))
         };
         self.status = result.err();
+    }
+
+    fn regenerate_pairing_secret(&mut self) -> Result<(), String> {
+        // Stop first: the receiver owns the uinput device and its teardown
+        // releases injected state before any pairing credential changes.
+        self.process.stop()?;
+        self.settings.pairing_secret = PairingSecret::generate().to_base64();
+        self.save_settings()
     }
 
     fn control_ui(&mut self, ui: &mut egui::Ui) {
@@ -249,18 +278,12 @@ impl ReceiverApp {
                 // Do not leave a receiver running with a secret different from the
                 // one shown in the UI. Stopping it destroys its uinput device, so
                 // Linux releases the virtual keyboard state before re-pairing.
-                self.status = match self.process.stop() {
+                self.status = match self.regenerate_pairing_secret() {
+                    Ok(()) => Some(
+                        "New pairing secret generated. Mac input is disabled until you enable it."
+                            .to_owned(),
+                    ),
                     Err(error) => Some(error),
-                    Ok(()) => {
-                        self.settings.pairing_secret = PairingSecret::generate().to_base64();
-                        match self.save_settings() {
-                            Ok(()) => Some(
-                                "New pairing secret generated. Mac input is disabled until you enable it."
-                                    .to_owned(),
-                            ),
-                            Err(error) => Some(error),
-                        }
-                    }
                 };
             }
         });
@@ -274,7 +297,7 @@ impl ReceiverApp {
     }
 }
 
-impl eframe::App for ReceiverApp {
+impl eframe::App for ReceiverApp<ReceiverProcess> {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         egui::TopBottomPanel::top("tabs").show(context, |ui| {
             ui.horizontal(|ui| {
@@ -364,6 +387,10 @@ fn local_ipv4_addresses() -> Vec<Ipv4Addr> {
     let Ok(interfaces) = get_if_addrs() else {
         return Vec::new();
     };
+    local_ipv4_addresses_from(interfaces)
+}
+
+fn local_ipv4_addresses_from(interfaces: impl IntoIterator<Item = Interface>) -> Vec<Ipv4Addr> {
     interfaces
         .into_iter()
         .filter_map(|interface| match interface.addr {
@@ -390,6 +417,35 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use get_if_addrs::Ifv4Addr;
+
+    #[derive(Default)]
+    struct FakeReceiverProcess {
+        running: bool,
+        calls: Vec<&'static str>,
+        start_error: Option<String>,
+    }
+
+    impl ReceiverSupervisor for FakeReceiverProcess {
+        fn is_running(&mut self) -> bool {
+            self.running
+        }
+
+        fn start(&mut self, _settings: &ReceiverSettings) -> Result<(), String> {
+            self.calls.push("start");
+            if let Some(error) = &self.start_error {
+                return Err(error.clone());
+            }
+            self.running = true;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), String> {
+            self.calls.push("stop");
+            self.running = false;
+            Ok(())
+        }
+    }
 
     #[test]
     fn generated_default_settings_are_valid() {
@@ -472,6 +528,125 @@ mod tests {
         app.apply_settings().unwrap();
         assert_eq!(load_settings(&path).unwrap().bind, "127.0.0.1:4343");
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn control_toggle_starts_then_stops_receiver_without_spawning_a_real_process() {
+        let directory = unique_test_directory("control-toggle");
+        let path = directory.join(CONFIG_FILE);
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            path.clone(),
+            FakeReceiverProcess::default(),
+        );
+
+        app.toggle_receiver();
+        assert!(app.process.running);
+        assert_eq!(app.process.calls, ["start"]);
+        assert!(path.exists());
+        assert!(app.status.is_none());
+
+        app.toggle_receiver();
+        assert!(!app.process.running);
+        assert_eq!(app.process.calls, ["start", "stop"]);
+        assert!(app.status.is_none());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn control_toggle_surfaces_safe_start_error() {
+        let directory = unique_test_directory("toggle-error");
+        let path = directory.join(CONFIG_FILE);
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            path,
+            FakeReceiverProcess {
+                start_error: Some("receiver unavailable".to_owned()),
+                ..Default::default()
+            },
+        );
+
+        app.toggle_receiver();
+        assert_eq!(app.process.calls, ["start"]);
+        assert_eq!(app.status.as_deref(), Some("receiver unavailable"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saving_active_settings_restarts_receiver_with_persisted_values() {
+        let directory = unique_test_directory("active-settings");
+        let path = directory.join(CONFIG_FILE);
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings {
+                bind: "127.0.0.1:4343".to_owned(),
+                pairing_secret: PairingSecret::generate().to_base64(),
+            },
+            path.clone(),
+            FakeReceiverProcess {
+                running: true,
+                ..Default::default()
+            },
+        );
+
+        app.apply_settings().unwrap();
+        assert!(app.process.running);
+        assert_eq!(app.process.calls, ["stop", "start"]);
+        assert_eq!(load_settings(&path).unwrap().bind, "127.0.0.1:4343");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn generating_secret_stops_input_before_persisting_rotated_secret() {
+        let directory = unique_test_directory("rotate-secret");
+        let path = directory.join(CONFIG_FILE);
+        let old_secret = PairingSecret::generate().to_base64();
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings {
+                bind: "0.0.0.0:4242".to_owned(),
+                pairing_secret: old_secret.clone(),
+            },
+            path.clone(),
+            FakeReceiverProcess {
+                running: true,
+                ..Default::default()
+            },
+        );
+
+        app.regenerate_pairing_secret().unwrap();
+
+        assert_eq!(app.process.calls, ["stop"]);
+        assert!(!app.process.running);
+        assert_ne!(app.settings.pairing_secret, old_secret);
+        assert_eq!(
+            load_settings(&path).unwrap().pairing_secret,
+            app.settings.pairing_secret
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn ip_display_filters_loopback_and_deduplicates_addresses() {
+        let interfaces = vec![
+            ipv4_interface("lo", [127, 0, 0, 1]),
+            ipv4_interface("wlan0", [192, 168, 1, 42]),
+            ipv4_interface("docker0", [192, 168, 1, 42]),
+            ipv4_interface("eth0", [10, 0, 0, 5]),
+        ];
+        assert_eq!(
+            local_ipv4_addresses_from(interfaces),
+            vec![Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(192, 168, 1, 42)]
+        );
+    }
+
+    fn ipv4_interface(name: &str, octets: [u8; 4]) -> Interface {
+        Interface {
+            name: name.to_owned(),
+            addr: IfAddr::V4(Ifv4Addr {
+                ip: Ipv4Addr::from(octets),
+                netmask: Ipv4Addr::new(255, 255, 255, 0),
+                broadcast: None,
+            }),
+        }
     }
 
     fn unique_test_directory(label: &str) -> PathBuf {
