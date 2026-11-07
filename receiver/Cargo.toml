@@ -12,6 +12,7 @@ desktop-ui = ["dep:eframe", "dep:get_if_addrs", "dep:serde", "dep:toml"]
 base64 = "0.22"
 chacha20poly1305 = "0.10"
 clap = { version = "4.5", features = ["derive", "env"] }
+ctrlc = "3.4"
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"], optional = true }
 get_if_addrs = { version = "0.5", optional = true }
 hkdf = "0.12"
