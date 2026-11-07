@@ -57,6 +57,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         pairingSecretField.stringValue = draft.pairingSecret
         showInDockCheckbox.state = draft.showInDock ? .on : .off
         messageLabel.stringValue = notice ?? ""
+        guard let window else { return }
 
         // Accessory applications may still activate a window programmatically.
         // Keeping this in sync with the saved Dock choice avoids a Dock icon
@@ -64,8 +65,12 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         DockVisibilityPreference.apply(showInDock: draft.showInDock)
         NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
         NSApp.activate(ignoringOtherApps: true)
+        if !window.isVisible {
+            // A window constructed at (0, 0) otherwise appears in the lower
+            // left corner on first use. Preserve a user-moved open window.
+            window.center()
+        }
         showWindow(nil)
-        guard let window else { return }
         window.level = .normal
         window.makeKeyAndOrderFront(nil)
         window.makeMain()
