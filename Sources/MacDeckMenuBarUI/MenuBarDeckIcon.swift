@@ -6,25 +6,22 @@ import AppKit
 public enum MenuBarDeckIcon {
     /// Empty screen, then one, two, and three dots.
     public static let connectingFrameCount = 4
-    public static let scale: CGFloat = 1.0
 
     public static func image(for status: MenuBarStatus, connectingPhase: Int = 0) -> NSImage {
-        // Render the native 36 × 20 vector size for maximum menu-bar legibility.
-        let size = NSSize(width: 36 * scale, height: 20 * scale)
+        // A compact 30 × 20 layout retains the original height and reflows the
+        // controls rather than squeezing a wider silhouette horizontally.
+        let size = NSSize(width: 30, height: 20)
         let image = NSImage(size: size, flipped: false) { _ in
-            let transform = NSAffineTransform()
-            transform.scale(by: scale)
-            transform.concat()
             NSColor.white.setFill()
             NSColor.white.setStroke()
 
-            let deck = NSBezierPath(roundedRect: NSRect(x: 1, y: 3, width: 34, height: 14), xRadius: 5.2, yRadius: 5.2)
+            let deck = NSBezierPath(roundedRect: NSRect(x: 1, y: 3, width: 28, height: 14), xRadius: 5.2, yRadius: 5.2)
             deck.lineWidth = 1.25
             deck.stroke()
 
             // The screen takes priority. The stick centres are geometrically at
             // the midpoint of each remaining side region, not merely near it.
-            let screen = NSRect(x: 8.7, y: 6.0, width: 18.6, height: 8.0)
+            let screen = NSRect(x: 7.4, y: 6.0, width: 15.2, height: 8.0)
             let screenPath = NSBezierPath(roundedRect: screen, xRadius: 0.8, yRadius: 0.8)
             screenPath.lineWidth = 0.85
             screenPath.stroke()
@@ -33,7 +30,7 @@ public enum MenuBarDeckIcon {
                 break
             case .connecting:
                 let visibleDotCount = connectingPhase % connectingFrameCount
-                for x in [13.1, 17.3, 21.5].prefix(visibleDotCount) {
+                for x in [10.8, 14.15, 17.5].prefix(visibleDotCount) {
                     NSBezierPath(ovalIn: NSRect(x: x, y: 9.15, width: 1.7, height: 1.7)).fill()
                 }
             case .remote:
@@ -51,8 +48,8 @@ public enum MenuBarDeckIcon {
 
             // Unchanged stick size; only the geometry changes. Their centres
             // are halfway between the display and the rounded body's sides.
-            NSBezierPath(ovalIn: NSRect(x: 3.1, y: 8.25, width: 3.5, height: 3.5)).fill()
-            NSBezierPath(ovalIn: NSRect(x: 29.4, y: 8.25, width: 3.5, height: 3.5)).fill()
+            NSBezierPath(ovalIn: NSRect(x: 2.76, y: 8.25, width: 3.5, height: 3.5)).fill()
+            NSBezierPath(ovalIn: NSRect(x: 23.74, y: 8.25, width: 3.5, height: 3.5)).fill()
             return true
         }
         image.isTemplate = true
