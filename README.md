@@ -30,14 +30,10 @@ Build both binaries together so the app can launch its CLI receiver sibling:
 ```sh
 cd receiver
 cargo build --release --locked --features desktop-ui --bins
-./target/release/mac-deck-receiver-ui
-```
-
-To install **MacDeck** in Steam Deck Desktop Mode's application launcher, run:
-
-```sh
 sh scripts/install-steamdeck-app.sh
 ```
+
+This installs **MacDeck** into the Steam Deck Desktop Mode application launcher.
 
 The installer places both sibling binaries in `~/.local/bin`, gives the launcher an
 absolute path to its UI binary (so Plasma does not depend on its `PATH`), and
