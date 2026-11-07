@@ -85,6 +85,17 @@ after a rebuild, quit the app, turn its **MacDeckInputBridge** switch off and
 back on once in **System Settings → Privacy & Security → Accessibility**, then
 reopen `.build/MacDeckInputBridge.app`.
 
+### Keep Accessibility access across development builds
+
+macOS identifies privacy permissions through the app's code-signing designated
+requirement. An ad-hoc signature is tied to one exact build, so it causes an
+Accessibility prompt after source changes. Before repeatedly rebuilding, add
+an **Apple Development** certificate in **Xcode → Settings → Accounts → Manage
+Certificates → + → Apple Development**. The build script automatically uses
+that identity (or use `MAC_DECK_CODESIGN_IDENTITY='Apple Development: …' sh
+scripts/install-macos-app.sh` to select one). Grant Accessibility once to the
+resulting app bundle; later builds signed by that same identity retain it.
+
 Use **Settings…** to enter the Steam Deck host, port, and pairing secret. The secret is stored in the Mac Keychain, not in preferences or logs. **Show MacDeckInputBridge in Dock** is on by default for a consistent foreground Settings experience; turn it off to use the app exclusively from the menu bar. The menu-bar Steam Deck `ABC` icon shows the current destination: outlined badge for **LOCAL**, a small filled badge while **CONNECTING**, and a larger filled badge while input is being sent to the **Steam Deck**. The menu also exposes the same `Control + Shift + F12` toggle.
 
 ## Protocol and security model
