@@ -25,6 +25,8 @@ The sender maps physical macOS virtual key codes to Linux `KEY_*`/evdev codes; i
 
 Keyboard events can contain credentials. Keep the pairing secret confidential, use a trusted Wi-Fi network, and do not expose the receiver port to the Internet. The receiver accepts only an authenticated ready exchange and in-order session records. Its process should run as an ordinary user with group access to `/dev/uinput`, rather than as root; see [SteamOS setup](steamos-setup.md).
 
+The listener accepts connections without blocking on a handshake. At most four unauthenticated handshakes may be pending, each with a five-second timeout, and only one authenticated peer may own the virtual keyboard. The Desktop Mode app asks the receiver to stop with `SIGTERM`; the receiver polls for shutdown, releases all held virtual keys, and then destroys its uinput device. A forced termination is a bounded fallback only.
+
 ## Acceptance
 
 1. The hotkey moves safely between LOCAL, CONNECTING, and REMOTE.
