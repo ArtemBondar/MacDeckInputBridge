@@ -1,4 +1,5 @@
 import ApplicationServices
+import Carbon
 import Foundation
 import Network
 
@@ -13,6 +14,8 @@ public final class SenderController {
     private var settings: BridgeSettings?
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var layoutSyncEnabled = false
+    private var lastSentLayoutIdentifier: String?
 
     public init() {}
 
@@ -27,8 +30,8 @@ public final class SenderController {
         self.settings = try settings.validated()
         client?.close()
         client = try SenderClient(pairingSecret: pairingSecret)
-        client?.onReady = { [weak self] in
-            DispatchQueue.main.async { self?.connectionReady() }
+        client?.onReady = { [weak self] layoutSyncEnabled in
+            DispatchQueue.main.async { self?.connectionReady(layoutSyncEnabled: layoutSyncEnabled) }
         }
         client?.onFailure = { [weak self] in
             DispatchQueue.main.async { self?.connectionLost() }
@@ -75,6 +78,8 @@ public final class SenderController {
         eventTap = nil
         runLoopSource = nil
         state.connectionLost()
+        layoutSyncEnabled = false
+        lastSentLayoutIdentifier = nil
         updateMode()
     }
 
@@ -107,6 +112,7 @@ public final class SenderController {
             switch action {
             case .passThrough: break
             case let .suppress(packet):
+                sendCurrentLayoutIfNeeded()
                 client?.send(packet)
                 suppress = true
             case .beginConnection:
@@ -121,7 +127,9 @@ public final class SenderController {
         return suppress
     }
 
-    private func connectionReady() {
+    private func connectionReady(layoutSyncEnabled: Bool) {
+        self.layoutSyncEnabled = layoutSyncEnabled
+        lastSentLayoutIdentifier = nil
         state.connectionReady()
         updateMode()
     }
@@ -129,6 +137,8 @@ public final class SenderController {
     private func connectionLost() {
         let wasConnectingOrRemote = state.mode != .local
         state.connectionLost()
+        layoutSyncEnabled = false
+        lastSentLayoutIdentifier = nil
         updateMode()
         if wasConnectingOrRemote { connectionFailed?() }
     }
@@ -147,6 +157,28 @@ public final class SenderController {
         if flags.contains(.maskAlternate) { modifiers.insert(.option) }
         if flags.contains(.maskAlphaShift) { modifiers.insert(.capsLock) }
         return modifiers
+    }
+
+    private func sendCurrentLayoutIfNeeded() {
+        guard layoutSyncEnabled, let identifier = Self.currentKeyboardLayoutIdentifier(),
+              identifier != lastSentLayoutIdentifier else { return }
+        client?.send(.keyboardLayout(identifier: identifier))
+        lastSentLayoutIdentifier = identifier
+    }
+
+    /// A stable, non-sensitive identifier used only for Deck layout mapping.
+    /// It never represents typed content.
+    public static func currentKeyboardLayoutIdentifier() -> String? {
+        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+              let rawIdentifier = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else {
+            return nil
+        }
+        let identifier = Unmanaged<CFString>.fromOpaque(rawIdentifier).takeUnretainedValue() as String
+        let allowed = identifier.utf8.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0) ||
+                (97...122).contains($0) || $0 == 45 || $0 == 46 || $0 == 95
+        }
+        return allowed && !identifier.isEmpty && identifier.utf8.count <= 128 ? identifier : nil
     }
 }
 
@@ -175,7 +207,7 @@ private final class SenderClient {
     private var isReady = false
     private var nextGeneration: UInt64 = 0
     private var activeGeneration: UInt64?
-    var onReady: (() -> Void)?
+    var onReady: ((Bool) -> Void)?
     var onFailure: (() -> Void)?
 
     init(pairingSecret: String) throws {
@@ -272,9 +304,17 @@ private final class SenderClient {
         let packet = try session.open(combined: frame)
         self.session = session
         guard !isReady else { throw ProtocolError.invalidFrame }
-        guard packet == .serverReady else { throw ProtocolError.invalidFrame }
+        let layoutSyncEnabled: Bool
+        switch packet {
+        case .serverReady:
+            layoutSyncEnabled = false
+        case .serverReadyWithLayoutSync:
+            layoutSyncEnabled = true
+        default:
+            throw ProtocolError.invalidFrame
+        }
         isReady = true
-        onReady?()
+        onReady?(layoutSyncEnabled)
     }
 
     private func sendApplicationPacket(_ packet: BridgePacket) {
