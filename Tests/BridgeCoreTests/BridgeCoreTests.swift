@@ -58,6 +58,22 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(machine.handle(CapturedKeyEvent(kind: .keyUp, keyCode: 59)), [.passThrough])
     }
 
+    func testHotkeyShiftIsForwardedAfterItsLocalRelease() {
+        var machine = InputStateMachine()
+        _ = machine.handle(CapturedKeyEvent(kind: .flagsChanged, keyCode: 56, modifiers: [.shift]))
+        _ = machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.control, .shift]))
+        machine.connectionReady()
+
+        XCTAssertEqual(
+            machine.handle(CapturedKeyEvent(kind: .flagsChanged, keyCode: 56)),
+            [.passThrough]
+        )
+        XCTAssertEqual(
+            machine.handle(CapturedKeyEvent(kind: .flagsChanged, keyCode: 56, modifiers: [.shift])),
+            [.suppress(.key(code: 42, value: 1))]
+        )
+    }
+
     func testRemoteFlagsChangedForOptionForwardsCorrectState() {
         var machine = InputStateMachine()
         _ = machine.handle(CapturedKeyEvent(kind: .keyDown, keyCode: 111, modifiers: [.control, .shift]))
