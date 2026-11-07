@@ -148,6 +148,7 @@ struct ReceiverApp<P = ReceiverProcess> {
     settings_path: PathBuf,
     process: P,
     selected_tab: Tab,
+    ip_addresses: Vec<Ipv4Addr>,
     status: Option<String>,
 }
 
@@ -166,6 +167,7 @@ impl ReceiverApp<ReceiverProcess> {
             settings_path,
             process: ReceiverProcess { child: None },
             selected_tab: Tab::Control,
+            ip_addresses: local_ipv4_addresses(),
             status,
         }
     }
@@ -179,6 +181,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             settings_path,
             process,
             selected_tab: Tab::Control,
+            ip_addresses: Vec::new(),
             status: None,
         }
     }
@@ -249,6 +252,10 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         Ok(())
     }
 
+    fn refresh_ip_addresses(&mut self) {
+        self.ip_addresses = local_ipv4_addresses();
+    }
+
     fn control_ui(&mut self, ui: &mut egui::Ui) {
         let running = self.process.is_running();
         let (label, color) = if running {
@@ -301,8 +308,11 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         });
         ui.add_space(16.0);
         ui.heading("Steam Deck IP addresses");
-        for address in local_ipv4_addresses() {
+        for address in &self.ip_addresses {
             ui.monospace(address.to_string());
+        }
+        if ui.button("Refresh addresses").clicked() {
+            self.refresh_ip_addresses();
         }
         ui.add_space(8.0);
         ui.small("Use one of these addresses as --host in the Mac sender settings.");
@@ -314,7 +324,12 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
         egui::TopBottomPanel::top("tabs").show(context, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.selected_tab, Tab::Control, "Control");
-                ui.selectable_value(&mut self.selected_tab, Tab::Settings, "Settings");
+                if ui
+                    .selectable_value(&mut self.selected_tab, Tab::Settings, "Settings")
+                    .changed()
+                {
+                    self.refresh_ip_addresses();
+                }
             });
         });
         egui::CentralPanel::default().show(context, |ui| {
@@ -328,7 +343,13 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
                 ui.label(status);
             }
         });
-        context.request_repaint_after(std::time::Duration::from_millis(250));
+        // There is no animation. When disabled, egui can sleep until a real
+        // input event arrives. Poll a running child only once per second so a
+        // crash is eventually reflected in Control without waking the Deck at
+        // a display-frame rate.
+        if self.selected_tab == Tab::Control && self.process.is_running() {
+            context.request_repaint_after(Duration::from_secs(1));
+        }
     }
 }
 
@@ -623,6 +644,7 @@ mod tests {
             settings_path: path.clone(),
             process: ReceiverProcess { child: None },
             selected_tab: Tab::Settings,
+            ip_addresses: Vec::new(),
             status: None,
         };
         app.settings.bind = "127.0.0.1:4343".to_owned();
