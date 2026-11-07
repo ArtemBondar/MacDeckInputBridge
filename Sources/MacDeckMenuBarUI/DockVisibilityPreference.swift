@@ -16,6 +16,6 @@ public enum DockVisibilityPreference {
 
     @discardableResult
     public static func apply(showInDock: Bool) -> Bool {
-        NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
+        NSApplication.shared.setActivationPolicy(showInDock ? .regular : .accessory)
     }
 }
