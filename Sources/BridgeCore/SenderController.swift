@@ -16,6 +16,13 @@ public final class SenderController {
 
     public init() {}
 
+    /// Checks current trust without opening System Settings or showing a prompt.
+    /// The menu-bar UI uses this to avoid displaying a stale permission error
+    /// after the user has granted Accessibility access.
+    public static func isAccessibilityTrusted() -> Bool {
+        AXIsProcessTrusted()
+    }
+
     public func configure(settings: BridgeSettings, pairingSecret: String) throws {
         self.settings = try settings.validated()
         client?.close()
