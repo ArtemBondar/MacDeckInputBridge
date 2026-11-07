@@ -6,9 +6,9 @@ still follows the [manual checklist](manual-verification.md).
 
 ## macOS menu-bar app
 
-`swift test` verifies the AppKit Settings window becomes the foreground/key
-window, accepts typed host input, accepts a pasted pairing secret, and passes
-the entered values to Save. It also verifies the Dock preference defaults to
+`swift test` verifies the AppKit Settings window opens centered, becomes the
+foreground/key window, accepts typed host input, accepts a pasted pairing
+secret, and passes the entered values to Save. It also verifies the Dock preference defaults to
 shown, persists an explicit choice, keeps an accessory Settings window usable
 when Dock visibility is off, and covers the `LOCAL`, `CONNECTING`, and
 `REMOTE` variants of the Steam Deck menu-bar status icon, including a distinct
