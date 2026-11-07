@@ -52,6 +52,23 @@ launcher, so the Plasma task manager groups it with the correct icon.
 
 The app stores only its listen address and pairing secret in `$XDG_CONFIG_HOME/mac-deck-input-bridge/receiver.toml` (or `~/.config/...`), with owner-only permissions. It never records forwarded key events or typed content. The receiver still needs the non-root `/dev/uinput` setup described in [`docs/steamos-setup.md`](docs/steamos-setup.md).
 
+#### Optional Mac-first layout synchronization
+
+In the Deck app’s **Settings** tab, enable **Sync active layout from Mac** and
+add one mapping per input source, for example:
+
+```text
+com.apple.keylayout.US = 0
+com.apple.keylayout.Ukrainian = 1
+```
+
+The number is the zero-based order of that layout in **Plasma Settings →
+Keyboard → Layouts**. This is deliberately data-driven rather than limited to a
+small language list: add mappings for any macOS input source and any Deck
+layout. The macOS app shows the current source ID in its **Settings** window.
+When a source is not mapped or Plasma cannot switch it, physical-key forwarding
+continues using the Deck’s current layout.
+
 Build and run the sender on macOS:
 
 ```sh
