@@ -43,12 +43,16 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     required init?(coder: NSCoder) { nil }
 
-    public func show(draft: SettingsDraft, onSave: @escaping (SettingsDraft) -> String?) {
+    public func show(
+        draft: SettingsDraft,
+        notice: String? = nil,
+        onSave: @escaping (SettingsDraft) -> String?
+    ) {
         self.onSave = onSave
         hostField.stringValue = draft.host
         portField.stringValue = draft.port
         pairingSecretField.stringValue = draft.pairingSecret
-        messageLabel.stringValue = ""
+        messageLabel.stringValue = notice ?? ""
 
         // A bare Swift Package executable is launched by Terminal, which remains
         // frontmost unless this process explicitly becomes a regular app. Without
@@ -106,6 +110,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         messageLabel.textColor = .systemRed
         messageLabel.font = .systemFont(ofSize: 12)
         messageLabel.maximumNumberOfLines = 3
+        messageLabel.lineBreakMode = .byWordWrapping
+        messageLabel.cell?.wraps = true
 
         [hostField, portField, pairingSecretField].forEach { field in
             field.translatesAutoresizingMaskIntoConstraints = false
