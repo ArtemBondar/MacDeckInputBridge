@@ -158,18 +158,7 @@ enum Tab {
 impl ReceiverApp<ReceiverProcess> {
     fn new() -> Self {
         let settings_path = settings_path();
-        let (settings, status) = match load_settings(&settings_path) {
-            Ok(settings) => (settings, None),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                (ReceiverSettings::default(), None)
-            }
-            Err(error) => (
-                ReceiverSettings::default(),
-                Some(format!(
-                    "Could not load settings; using a new pairing secret: {error}"
-                )),
-            ),
-        };
+        let (settings, status) = load_settings_or_default(&settings_path);
         Self {
             settings,
             settings_path,
@@ -193,6 +182,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
     }
 
     fn save_settings(&mut self) -> Result<(), String> {
+        self.settings.validates()?;
         persist_settings(&self.settings_path, &self.settings)
             .map_err(|error| format!("Could not save settings: {error}"))
     }
@@ -220,12 +210,41 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         self.status = result.err();
     }
 
+    fn apply_settings_from_ui(&mut self) {
+        self.status = match self.apply_settings() {
+            Ok(()) => Some("Settings saved.".to_owned()),
+            Err(error) => Some(error),
+        };
+    }
+
+    fn copied_secret_status(&mut self) {
+        self.status = Some("Pairing secret copied to the clipboard.".to_owned());
+    }
+
+    fn regenerate_pairing_secret_from_ui(&mut self) {
+        self.status = match self.regenerate_pairing_secret() {
+            Ok(()) => Some(
+                "New pairing secret generated. Mac input is disabled until you enable it."
+                    .to_owned(),
+            ),
+            Err(error) => Some(error),
+        };
+    }
+
     fn regenerate_pairing_secret(&mut self) -> Result<(), String> {
         // Stop first: the receiver owns the uinput device and its teardown
         // releases injected state before any pairing credential changes.
         self.process.stop()?;
+        let previous_secret = self.settings.pairing_secret.clone();
         self.settings.pairing_secret = PairingSecret::generate().to_base64();
-        self.save_settings()
+        if let Err(error) = self.save_settings() {
+            // The receiver is safely stopped. Restore the value displayed in the
+            // UI to the last persisted credential so the user never copies a key
+            // that failed to save.
+            self.settings.pairing_secret = previous_secret;
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn control_ui(&mut self, ui: &mut egui::Ui) {
@@ -265,26 +284,17 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         ui.text_edit_singleline(&mut self.settings.pairing_secret);
         ui.horizontal(|ui| {
             if ui.button("Save settings").clicked() {
-                self.status = match self.apply_settings() {
-                    Ok(()) => Some("Settings saved.".to_owned()),
-                    Err(error) => Some(error),
-                };
+                self.apply_settings_from_ui();
             }
             if ui.button("Copy secret").clicked() {
                 context.copy_text(self.settings.pairing_secret.clone());
-                self.status = Some("Pairing secret copied to the clipboard.".to_owned());
+                self.copied_secret_status();
             }
             if ui.button("Generate new secret").clicked() {
                 // Do not leave a receiver running with a secret different from the
                 // one shown in the UI. Stopping it destroys its uinput device, so
                 // Linux releases the virtual keyboard state before re-pairing.
-                self.status = match self.regenerate_pairing_secret() {
-                    Ok(()) => Some(
-                        "New pairing secret generated. Mac input is disabled until you enable it."
-                            .to_owned(),
-                    ),
-                    Err(error) => Some(error),
-                };
+                self.regenerate_pairing_secret_from_ui();
             }
         });
         ui.add_space(16.0);
@@ -349,6 +359,21 @@ fn settings_path() -> PathBuf {
 fn load_settings(path: &Path) -> io::Result<ReceiverSettings> {
     let text = fs::read_to_string(path)?;
     toml::from_str(&text).map_err(io::Error::other)
+}
+
+fn load_settings_or_default(path: &Path) -> (ReceiverSettings, Option<String>) {
+    match load_settings(path) {
+        Ok(settings) => (settings, None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            (ReceiverSettings::default(), None)
+        }
+        Err(error) => (
+            ReceiverSettings::default(),
+            Some(format!(
+                "Could not load settings; using a new pairing secret: {error}"
+            )),
+        ),
+    }
 }
 
 fn persist_settings(path: &Path, settings: &ReceiverSettings) -> io::Result<()> {
@@ -424,6 +449,7 @@ mod tests {
         running: bool,
         calls: Vec<&'static str>,
         start_error: Option<String>,
+        stop_error: Option<String>,
     }
 
     impl ReceiverSupervisor for FakeReceiverProcess {
@@ -442,6 +468,9 @@ mod tests {
 
         fn stop(&mut self) -> Result<(), String> {
             self.calls.push("stop");
+            if let Some(error) = &self.stop_error {
+                return Err(error.clone());
+            }
             self.running = false;
             Ok(())
         }
@@ -459,6 +488,48 @@ mod tests {
             pairing_secret: "not base64".to_owned(),
         };
         assert!(settings.validates().is_err());
+    }
+
+    #[test]
+    fn invalid_settings_cannot_be_persisted_or_started_from_the_ui() {
+        let directory = unique_test_directory("invalid-ui-settings");
+        let path = directory.join(CONFIG_FILE);
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings {
+                bind: "invalid address".to_owned(),
+                pairing_secret: "not base64".to_owned(),
+            },
+            path.clone(),
+            FakeReceiverProcess::default(),
+        );
+
+        app.apply_settings_from_ui();
+        assert!(app.status.as_deref().unwrap_or_default().contains("base64"));
+        assert!(!path.exists());
+        assert!(app.process.calls.is_empty());
+
+        app.toggle_receiver();
+        assert!(app.status.as_deref().unwrap_or_default().contains("base64"));
+        assert!(app.process.calls.is_empty());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn missing_and_malformed_configuration_have_distinct_safe_states() {
+        let directory = unique_test_directory("load-settings");
+        let missing = directory.join("missing.toml");
+        let (_, missing_status) = load_settings_or_default(&missing);
+        assert!(missing_status.is_none());
+
+        fs::create_dir_all(&directory).unwrap();
+        let malformed = directory.join(CONFIG_FILE);
+        fs::write(&malformed, "not = [valid").unwrap();
+        let (_, malformed_status) = load_settings_or_default(&malformed);
+        assert!(malformed_status
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Could not load settings"));
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -573,6 +644,26 @@ mod tests {
     }
 
     #[test]
+    fn control_toggle_surfaces_stop_error_without_claiming_input_is_disabled() {
+        let directory = unique_test_directory("toggle-stop-error");
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            directory.join(CONFIG_FILE),
+            FakeReceiverProcess {
+                running: true,
+                stop_error: Some("receiver would not stop".to_owned()),
+                ..Default::default()
+            },
+        );
+
+        app.toggle_receiver();
+        assert!(app.process.running);
+        assert_eq!(app.process.calls, ["stop"]);
+        assert_eq!(app.status.as_deref(), Some("receiver would not stop"));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn saving_active_settings_restarts_receiver_with_persisted_values() {
         let directory = unique_test_directory("active-settings");
         let path = directory.join(CONFIG_FILE);
@@ -592,6 +683,55 @@ mod tests {
         assert!(app.process.running);
         assert_eq!(app.process.calls, ["stop", "start"]);
         assert_eq!(load_settings(&path).unwrap().bind, "127.0.0.1:4343");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saving_active_settings_stops_before_persist_failure_and_never_restarts() {
+        let directory = unique_test_directory("active-save-error");
+        fs::create_dir_all(&directory).unwrap();
+        let parent_file = directory.join("not-a-directory");
+        fs::write(&parent_file, "x").unwrap();
+        let path = parent_file.join(CONFIG_FILE);
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            path,
+            FakeReceiverProcess {
+                running: true,
+                ..Default::default()
+            },
+        );
+
+        app.apply_settings_from_ui();
+        assert_eq!(app.process.calls, ["stop"]);
+        assert!(!app.process.running);
+        assert!(app
+            .status
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Could not save settings"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saving_active_settings_reports_restart_failure_after_persisting() {
+        let directory = unique_test_directory("active-start-error");
+        let path = directory.join(CONFIG_FILE);
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            path.clone(),
+            FakeReceiverProcess {
+                running: true,
+                start_error: Some("uinput unavailable".to_owned()),
+                ..Default::default()
+            },
+        );
+
+        app.apply_settings_from_ui();
+        assert_eq!(app.process.calls, ["stop", "start"]);
+        assert!(!app.process.running);
+        assert_eq!(app.status.as_deref(), Some("uinput unavailable"));
+        assert!(path.exists());
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -625,6 +765,77 @@ mod tests {
     }
 
     #[test]
+    fn generating_secret_keeps_the_old_value_when_stop_or_persist_fails() {
+        let old_secret = PairingSecret::generate().to_base64();
+        let stop_error_directory = unique_test_directory("rotate-stop-error");
+        let mut stop_error_app = ReceiverApp::with_process(
+            ReceiverSettings {
+                bind: "0.0.0.0:4242".to_owned(),
+                pairing_secret: old_secret.clone(),
+            },
+            stop_error_directory.join(CONFIG_FILE),
+            FakeReceiverProcess {
+                running: true,
+                stop_error: Some("receiver would not stop".to_owned()),
+                ..Default::default()
+            },
+        );
+        stop_error_app.regenerate_pairing_secret_from_ui();
+        assert_eq!(stop_error_app.settings.pairing_secret, old_secret);
+        assert_eq!(
+            stop_error_app.status.as_deref(),
+            Some("receiver would not stop")
+        );
+
+        let persist_error_directory = unique_test_directory("rotate-persist-error");
+        fs::create_dir_all(&persist_error_directory).unwrap();
+        let parent_file = persist_error_directory.join("not-a-directory");
+        fs::write(&parent_file, "x").unwrap();
+        let mut persist_error_app = ReceiverApp::with_process(
+            ReceiverSettings {
+                bind: "0.0.0.0:4242".to_owned(),
+                pairing_secret: old_secret.clone(),
+            },
+            parent_file.join(CONFIG_FILE),
+            FakeReceiverProcess {
+                running: true,
+                ..Default::default()
+            },
+        );
+        persist_error_app.regenerate_pairing_secret_from_ui();
+        assert_eq!(persist_error_app.process.calls, ["stop"]);
+        assert_eq!(persist_error_app.settings.pairing_secret, old_secret);
+        assert!(persist_error_app
+            .status
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Could not save settings"));
+        let _ = fs::remove_dir_all(stop_error_directory);
+        fs::remove_dir_all(persist_error_directory).unwrap();
+    }
+
+    #[test]
+    fn copy_secret_has_a_non_sensitive_confirmation_message() {
+        let directory = unique_test_directory("copy-secret");
+        let secret = PairingSecret::generate().to_base64();
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings {
+                bind: "0.0.0.0:4242".to_owned(),
+                pairing_secret: secret.clone(),
+            },
+            directory.join(CONFIG_FILE),
+            FakeReceiverProcess::default(),
+        );
+        app.copied_secret_status();
+        assert_eq!(
+            app.status.as_deref(),
+            Some("Pairing secret copied to the clipboard.")
+        );
+        assert!(!app.status.as_deref().unwrap_or_default().contains(&secret));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn ip_display_filters_loopback_and_deduplicates_addresses() {
         let interfaces = vec![
             ipv4_interface("lo", [127, 0, 0, 1]),
@@ -636,6 +847,12 @@ mod tests {
             local_ipv4_addresses_from(interfaces),
             vec![Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(192, 168, 1, 42)]
         );
+    }
+
+    #[test]
+    fn ip_display_handles_no_usable_addresses() {
+        assert!(local_ipv4_addresses_from(vec![ipv4_interface("lo", [127, 0, 0, 1])]).is_empty());
+        assert!(local_ipv4_addresses_from(Vec::new()).is_empty());
     }
 
     fn ipv4_interface(name: &str, octets: [u8; 4]) -> Interface {
