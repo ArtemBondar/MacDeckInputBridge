@@ -7,6 +7,12 @@ app_root="$project_root/.build/MacDeckInputBridge.app"
 contents="$app_root/Contents"
 resources="$contents/Resources"
 icon_source="$project_root/assets/MacDeckInputBridgeIcon.jpg"
+signing_identity="${MAC_DECK_CODESIGN_IDENTITY:-}"
+
+if [ -z "$signing_identity" ]; then
+  signing_identity=$(security find-identity -v -p codesigning 2>/dev/null | \
+    sed -n 's/.*"\(Apple Development:.*\)"/\1/p' | head -n 1 || true)
+fi
 
 cd "$project_root"
 swift build -c release --product mac-deck-menu-bar
@@ -60,10 +66,18 @@ cat > "$contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# The SwiftPM executable is linker-signed with its target name. Re-sign the
-# completed bundle with its final bundle identifier so macOS TCC evaluates the
-# same identity shown in Accessibility settings.
-codesign --force --sign - --identifier com.artembondar.MacDeckInputBridge "$app_root"
+# Accessibility trust is associated with the app's designated requirement.
+# An Apple Development certificate supplies a stable requirement across local
+# builds; an ad-hoc signature does not. Use MAC_DECK_CODESIGN_IDENTITY to pick
+# a specific identity when more than one is available.
+if [ -n "$signing_identity" ]; then
+  codesign --force --sign "$signing_identity" --identifier com.artembondar.MacDeckInputBridge "$app_root"
+  echo "Signed with: $signing_identity"
+else
+  codesign --force --sign - --identifier com.artembondar.MacDeckInputBridge "$app_root"
+  echo "WARNING: no Apple Development signing identity was found. Accessibility will need to be granted again after each changed build."
+  echo "Add an Apple Development certificate in Xcode Settings > Accounts > Manage Certificates, then rebuild."
+fi
 codesign --verify --deep --strict "$app_root"
 
 echo "Built $app_root"
