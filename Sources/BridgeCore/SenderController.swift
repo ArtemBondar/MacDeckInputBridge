@@ -6,6 +6,7 @@ import Network
 public final class SenderController {
     public private(set) var mode: BridgeMode = .local
     public var statusChanged: ((BridgeMode) -> Void)?
+    public var connectionFailed: (() -> Void)?
 
     private var state = InputStateMachine()
     private var client: SenderClient?
@@ -119,8 +120,10 @@ public final class SenderController {
     }
 
     private func connectionLost() {
+        let wasConnectingOrRemote = state.mode != .local
         state.connectionLost()
         updateMode()
+        if wasConnectingOrRemote { connectionFailed?() }
     }
 
     private func updateMode() {
