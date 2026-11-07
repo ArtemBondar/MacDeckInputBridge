@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = []
-desktop-ui = ["dep:eframe", "dep:get_if_addrs", "dep:serde", "dep:toml"]
+desktop-ui = ["dep:eframe", "dep:get_if_addrs", "dep:image", "dep:serde", "dep:toml"]
 
 [dependencies]
 base64 = "0.22"
@@ -16,6 +16,7 @@ ctrlc = "3.4"
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"], optional = true }
 get_if_addrs = { version = "0.5", optional = true }
 hkdf = "0.12"
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 libc = "0.2"
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"], optional = true }
