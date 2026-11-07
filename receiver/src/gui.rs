@@ -51,7 +51,10 @@ impl ReceiverSettings {
             .map_err(|_| {
                 "Bind address must be an IP address and port, for example 0.0.0.0:4242".to_owned()
             })?;
-        if self.sync_layout_from_mac {
+        // Mappings are optional overrides. With none present, the receiver
+        // automatically matches the Mac source name against configured Plasma
+        // layouts; validate user-supplied overrides whenever they exist.
+        if !self.layout_mappings.trim().is_empty() {
             parse_layout_mappings(&self.layout_mappings)?;
         }
         Ok(())
@@ -325,13 +328,13 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         ui.small("When enabled, the Mac chooses the active Deck layout before it sends keys.");
         if self.settings.sync_layout_from_mac {
             ui.add_space(6.0);
-            ui.label("Layout mappings (one per line: Mac input-source ID = Deck layout number)");
+            ui.label("Manual overrides (optional; one per line: Mac input-source ID = Deck layout number)");
             ui.add(
                 egui::TextEdit::multiline(&mut self.settings.layout_mappings)
                     .desired_rows(4)
                     .hint_text("com.apple.keylayout.US = 0\ncom.apple.keylayout.Ukrainian = 1"),
             );
-            ui.small("Deck layout numbers start at 0 and follow their order in Plasma Settings > Keyboard > Layouts.");
+            ui.small("Standard layouts are matched automatically. Use an override only for a custom or ambiguous layout; numbers start at 0 in Plasma Settings > Keyboard > Layouts.");
         }
         ui.add_space(16.0);
         ui.heading("Steam Deck IP addresses");
@@ -444,9 +447,6 @@ fn parse_layout_mappings(text: &str) -> Result<Vec<String>, String> {
             )
         })?;
         mappings.push(format!("{source}={index}"));
-    }
-    if mappings.is_empty() {
-        return Err("Add at least one layout mapping before enabling Mac layout sync.".to_owned());
     }
     Ok(mappings)
 }
@@ -619,14 +619,17 @@ mod tests {
     }
 
     #[test]
-    fn enabled_layout_sync_requires_a_mapping_but_disabled_sync_does_not() {
-        let mut settings = ReceiverSettings {
+    fn enabled_layout_sync_allows_automatic_matching_and_validates_manual_overrides() {
+        let settings = ReceiverSettings {
             sync_layout_from_mac: true,
             ..ReceiverSettings::default()
         };
-        assert!(settings.validates().is_err());
-        settings.layout_mappings = "com.apple.keylayout.US = 0".to_owned();
         assert!(settings.validates().is_ok());
+        let settings = ReceiverSettings {
+            layout_mappings: "com.apple.keylayout.US = invalid".to_owned(),
+            ..settings
+        };
+        assert!(settings.validates().is_err());
     }
 
     #[test]
