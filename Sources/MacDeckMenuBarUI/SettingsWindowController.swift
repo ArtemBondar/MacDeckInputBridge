@@ -5,12 +5,20 @@ public struct SettingsDraft: Equatable {
     public var port: String
     public var pairingSecret: String
     public var showInDock: Bool
+    public var currentInputSourceID: String?
 
-    public init(host: String, port: String, pairingSecret: String, showInDock: Bool = true) {
+    public init(
+        host: String,
+        port: String,
+        pairingSecret: String,
+        showInDock: Bool = true,
+        currentInputSourceID: String? = nil
+    ) {
         self.host = host
         self.port = port
         self.pairingSecret = pairingSecret
         self.showInDock = showInDock
+        self.currentInputSourceID = currentInputSourceID
     }
 }
 
@@ -24,6 +32,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     public let portField = NSTextField(string: "")
     public let pairingSecretField = NSSecureTextField(string: "")
     public let showInDockCheckbox = NSButton(checkboxWithTitle: "Show MacDeckInputBridge in Dock", target: nil, action: nil)
+    public let currentInputSourceLabel = NSTextField(wrappingLabelWithString: "")
     public let messageLabel = NSTextField(wrappingLabelWithString: "")
     public let saveButton = NSButton(title: "Save", target: nil, action: nil)
 
@@ -31,7 +40,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     public init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 390),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 430),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -56,6 +65,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         portField.stringValue = draft.port
         pairingSecretField.stringValue = draft.pairingSecret
         showInDockCheckbox.state = draft.showInDock ? .on : .off
+        currentInputSourceLabel.stringValue = draft.currentInputSourceID ?? "Unavailable"
         messageLabel.stringValue = notice ?? ""
         guard let window else { return }
 
@@ -114,6 +124,10 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         let guidance = NSTextField(wrappingLabelWithString: "Stored only in this Mac’s Keychain; typed keys are never stored or logged.")
         guidance.textColor = .secondaryLabelColor
         guidance.font = .systemFont(ofSize: 12)
+        let inputSourceTitle = label("Current Mac layout ID", font: .systemFont(ofSize: 13, weight: .medium))
+        currentInputSourceLabel.textColor = .secondaryLabelColor
+        currentInputSourceLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        currentInputSourceLabel.maximumNumberOfLines = 2
         messageLabel.textColor = .systemRed
         messageLabel.font = .systemFont(ofSize: 12)
         messageLabel.maximumNumberOfLines = 3
@@ -143,6 +157,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             pairingTitle,
             fieldRow("Pairing secret", pairingSecretField),
             guidance,
+            inputSourceTitle,
+            currentInputSourceLabel,
             showInDockCheckbox,
             messageLabel,
             buttonRow(saveButton)
