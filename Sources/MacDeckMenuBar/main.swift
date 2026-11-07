@@ -7,11 +7,16 @@ import SwiftUI
 struct MacDeckMenuBarApp: App {
     @StateObject private var model = MenuBarModel()
 
+    init() {
+        DockVisibilityPreference.apply(showInDock: DockVisibilityPreference.load())
+    }
+
     var body: some Scene {
         MenuBarExtra {
             MenuContentView(model: model)
         } label: {
-            Image(systemName: model.status.symbolName)
+            Image(nsImage: MenuBarDeckIcon.image(for: model.status.presentationStatus))
+                .renderingMode(.template)
                 .accessibilityLabel(model.status.title)
         }
     }
@@ -22,6 +27,7 @@ private final class MenuBarModel: ObservableObject {
     @Published var host: String
     @Published var port: String
     @Published var pairingSecret: String
+    @Published var showInDock: Bool
     @Published var status: SenderStatus = .local
     @Published var message: String?
 
@@ -34,6 +40,7 @@ private final class MenuBarModel: ObservableObject {
         let settings = store.loadSettings()
         host = settings.host
         port = String(settings.port)
+        showInDock = DockVisibilityPreference.load()
         do {
             pairingSecret = try store.loadPairingSecret() ?? ""
         } catch {
@@ -83,7 +90,7 @@ private final class MenuBarModel: ObservableObject {
             started = false
         }
         SettingsWindowController.shared.show(
-            draft: SettingsDraft(host: host, port: port, pairingSecret: pairingSecret),
+            draft: SettingsDraft(host: host, port: port, pairingSecret: pairingSecret, showInDock: showInDock),
             notice: message
         ) { draft in
             self.saveSettings(draft)
@@ -95,9 +102,11 @@ private final class MenuBarModel: ObservableObject {
             host = draft.host
             port = draft.port
             pairingSecret = draft.pairingSecret
+            showInDock = draft.showInDock
             let settings = try settingsFromFields()
             try store.saveSettings(settings)
             try store.savePairingSecret(pairingSecret)
+            DockVisibilityPreference.save(showInDock: showInDock)
             message = "Saved. The next toggle will use these settings."
             return nil
         } catch {
@@ -143,14 +152,6 @@ private enum SenderStatus: Equatable {
         case .local: return "Mac keyboard: Local"
         case .connecting: return "Mac keyboard: Connecting"
         case .remote: return "Mac keyboard: Steam Deck"
-        }
-    }
-
-    var symbolName: String {
-        switch self {
-        case .local: return "keyboard"
-        case .connecting: return "keyboard.badge.ellipsis"
-        case .remote: return "keyboard.fill"
         }
     }
 
