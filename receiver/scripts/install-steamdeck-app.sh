@@ -11,6 +11,7 @@ bin_root=${MAC_DECK_INSTALL_BIN_DIR:-"$HOME/.local/bin"}
 applications_root=${MAC_DECK_INSTALL_APPLICATIONS_DIR:-"$HOME/.local/share/applications"}
 icons_root=${MAC_DECK_INSTALL_ICON_DIR:-"$HOME/.local/share/icons/hicolor/1024x1024/apps"}
 fallback_icons_root=${MAC_DECK_INSTALL_FALLBACK_ICON_DIR:-"$HOME/.local/share/icons/hicolor/scalable/apps"}
+pixmaps_root=${MAC_DECK_INSTALL_PIXMAP_DIR:-"$HOME/.local/share/pixmaps"}
 ui_binary="$build_root/mac-deck-receiver-ui"
 receiver_binary="$build_root/mac-deck-receiver"
 icon_source=${MAC_DECK_ICON_SOURCE:-"$project_root/assets/MacDeckInputBridgeIcon.png"}
@@ -21,24 +22,24 @@ if [ ! -x "$ui_binary" ] || [ ! -x "$receiver_binary" ]; then
   exit 1
 fi
 
-mkdir -p "$bin_root" "$icons_root" "$fallback_icons_root"
+mkdir -p "$bin_root" "$icons_root" "$fallback_icons_root" "$pixmaps_root"
 install -m 755 "$receiver_binary" "$bin_root/mac-deck-receiver"
 install -m 755 "$ui_binary" "$bin_root/mac-deck-receiver-ui"
 if [ -f "$icon_source" ]; then
   # The full repository includes the exact macOS app icon.
-  installed_icon="$icons_root/mac-deck-input-bridge.png"
-  install -m 644 "$icon_source" "$installed_icon"
+  install -m 644 "$icon_source" "$icons_root/mac-deck-input-bridge.png"
+  # ~/.local/share/pixmaps is supported by older Plasma releases too.
+  install -m 644 "$icon_source" "$pixmaps_root/mac-deck-input-bridge.png"
 else
   # A source archive may exclude large generated assets. The launcher must
   # still work; use the matching, source-controlled menu-bar silhouette.
-  installed_icon="$fallback_icons_root/mac-deck-input-bridge.svg"
-  install -m 644 "$fallback_icon" "$installed_icon"
+  install -m 644 "$fallback_icon" "$fallback_icons_root/mac-deck-input-bridge.svg"
+  install -m 644 "$fallback_icon" "$pixmaps_root/mac-deck-input-bridge.svg"
   echo "MacDeck PNG icon was not found; installed the matching vector icon instead." >&2
 fi
 
 mkdir -p "$applications_root"
 sed -e "s|@MAC_DECK_RECEIVER_UI@|$bin_root/mac-deck-receiver-ui|" \
-  -e "s|@MAC_DECK_ICON@|$installed_icon|" \
   "$receiver_root/resources/mac-deck-input-bridge.desktop" \
   > "$applications_root/mac-deck-input-bridge.desktop"
 chmod 644 "$applications_root/mac-deck-input-bridge.desktop"
