@@ -194,6 +194,17 @@ final class SettingsWindowControllerTests: XCTestCase {
             XCTAssertGreaterThan(image.size.width, 0)
             XCTAssertGreaterThan(image.size.height, 0)
         }
+
+        XCTAssertNotEqual(
+            MenuBarDeckIcon.image(for: .local).tiffRepresentation,
+            MenuBarDeckIcon.image(for: .connecting).tiffRepresentation,
+            "CONNECTING must render a visible in-progress state."
+        )
+        XCTAssertNotEqual(
+            MenuBarDeckIcon.image(for: .local).tiffRepresentation,
+            MenuBarDeckIcon.image(for: .remote).tiffRepresentation,
+            "REMOTE must render a visibly captured keyboard state."
+        )
     }
 
     private func drainMainQueue() {
