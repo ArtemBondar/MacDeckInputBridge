@@ -8,7 +8,13 @@ struct MacDeckMenuBarApp: App {
     @StateObject private var model = MenuBarModel()
 
     init() {
-        DockVisibilityPreference.apply(showInDock: DockVisibilityPreference.load())
+        let showInDock = DockVisibilityPreference.load()
+        // SwiftUI constructs App before AppKit has installed NSApp. Defer the
+        // policy until the first main-loop turn; accessing NSApp here crashes
+        // when launching the bundled application from Finder or the Dock.
+        DispatchQueue.main.async {
+            DockVisibilityPreference.apply(showInDock: showInDock)
+        }
     }
 
     var body: some Scene {
