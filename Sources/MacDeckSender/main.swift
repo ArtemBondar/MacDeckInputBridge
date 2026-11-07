@@ -45,8 +45,12 @@ private final class EventTapController {
 
     init(sender: SenderClient, host: String, port: UInt16) {
         self.sender = sender; self.host = host; self.port = port
-        sender.onReady = { [weak self] in self?.state.connectionReady() }
-        sender.onFailure = { [weak self] in self?.state.connectionLost() }
+        sender.onReady = { [weak self] in
+            DispatchQueue.main.async { self?.state.connectionReady() }
+        }
+        sender.onFailure = { [weak self] in
+            DispatchQueue.main.async { self?.state.connectionLost() }
+        }
     }
 
     func start() throws {
@@ -70,7 +74,10 @@ private final class EventTapController {
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         guard type == .keyDown || type == .keyUp || type == .flagsChanged else {
-            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput { state.connectionLost() }
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                state.connectionLost()
+                sender.close()
+            }
             return Unmanaged.passUnretained(event)
         }
         let rawFlags = event.flags
