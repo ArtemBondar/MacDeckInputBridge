@@ -1,7 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=MacDeckInputBridge Receiver
-Comment=Control encrypted Mac keyboard input to this Steam Deck
-Exec=mac-deck-receiver-ui
+Name=MacDeck
+GenericName=Mac keyboard receiver
+Comment=Receive encrypted keyboard input from your Mac
+Exec=@MAC_DECK_RECEIVER_UI@
+Icon=mac-deck-input-bridge
 Terminal=false
 Categories=Utility;
+StartupNotify=true
