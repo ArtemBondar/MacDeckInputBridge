@@ -61,7 +61,10 @@ public struct InputStateMachine: Sendable {
         }
 
         if localOnlyKeys.contains(event.keyCode) {
-            if event.kind == .keyUp { localOnlyKeys.remove(event.keyCode) }
+            if event.kind == .keyUp ||
+                (event.kind == .flagsChanged && !modifierIsDown(event.keyCode, modifiers: event.modifiers)) {
+                localOnlyKeys.remove(event.keyCode)
+            }
             return [.passThrough]
         }
         guard mode == .remote, let code = KeyMapping.linuxCode(for: event.keyCode) else { return [.passThrough] }
