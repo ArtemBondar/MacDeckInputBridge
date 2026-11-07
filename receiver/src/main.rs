@@ -4,7 +4,7 @@ use mac_deck_receiver::{
     PairingSecret, SessionFramer,
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     io,
     net::{Shutdown, TcpListener, TcpStream},
     path::PathBuf,
@@ -138,6 +138,14 @@ fn handle_authenticated_client(
 struct PlasmaLayoutSwitcher {
     qdbus: PathBuf,
     mappings: HashMap<String, u8>,
+    automatic_layouts: Vec<ConfiguredLayout>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ConfiguredLayout {
+    index: u8,
+    xkb_code: String,
+    description: String,
 }
 
 impl PlasmaLayoutSwitcher {
@@ -157,17 +165,27 @@ impl PlasmaLayoutSwitcher {
                 .map_err(|_| "invalid Deck layout number")?;
             parsed.insert(source.to_owned(), index);
         }
-        if parsed.is_empty() {
-            return Err("no layout mappings were supplied".to_owned());
+        let automatic_layouts = configured_plasma_layouts();
+        if parsed.is_empty() && automatic_layouts.is_empty() {
+            return Err(
+                "no Plasma keyboard layouts were found; add layouts in Plasma Settings first"
+                    .to_owned(),
+            );
         }
         Ok(Self {
             qdbus,
             mappings: parsed,
+            automatic_layouts,
         })
     }
 
     fn switch_to(&self, mac_input_source: &str) -> io::Result<()> {
-        let Some(index) = self.mappings.get(mac_input_source) else {
+        let Some(index) = self
+            .mappings
+            .get(mac_input_source)
+            .copied()
+            .or_else(|| automatic_layout_index(mac_input_source, &self.automatic_layouts))
+        else {
             // An unmapped layout is not an error: ordinary physical key
             // forwarding still works using the Deck's current layout.
             return Ok(());
@@ -187,6 +205,127 @@ impl PlasmaLayoutSwitcher {
             Err(io::Error::other("Plasma rejected the layout switch"))
         }
     }
+}
+
+fn configured_plasma_layouts() -> Vec<ConfiguredLayout> {
+    let Some(layout_list) = read_kxkbrc_layout_list() else {
+        return Vec::new();
+    };
+    let descriptions = read_xkb_layout_descriptions();
+    layout_list
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, code)| {
+            let index = u8::try_from(index).ok()?;
+            let description = descriptions.get(&code)?.clone();
+            Some(ConfiguredLayout {
+                index,
+                xkb_code: code,
+                description,
+            })
+        })
+        .collect()
+}
+
+fn read_kxkbrc_layout_list() -> Option<Vec<String>> {
+    let root = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    let contents = std::fs::read_to_string(root.join("kxkbrc")).ok()?;
+    let mut in_layout_section = false;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_layout_section = line == "[Layout]";
+            continue;
+        }
+        if in_layout_section {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            if key.trim() == "LayoutList" {
+                return Some(
+                    value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|code| !code.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                );
+            }
+        }
+    }
+    None
+}
+
+fn read_xkb_layout_descriptions() -> BTreeMap<String, String> {
+    let rules_files = [
+        "/usr/share/X11/xkb/rules/base.lst",
+        "/usr/share/X11/xkb/rules/evdev.lst",
+    ];
+    for rules_file in rules_files {
+        let Ok(contents) = std::fs::read_to_string(rules_file) else {
+            continue;
+        };
+        let mut descriptions = BTreeMap::new();
+        let mut in_layout_section = false;
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.starts_with('!') {
+                in_layout_section = line == "! layout";
+                continue;
+            }
+            if !in_layout_section || line.is_empty() {
+                continue;
+            }
+            let mut fields = line.split_whitespace();
+            let Some(code) = fields.next() else { continue };
+            let description = fields.collect::<Vec<_>>().join(" ");
+            if !description.is_empty() {
+                descriptions.insert(code.to_owned(), description);
+            }
+        }
+        if !descriptions.is_empty() {
+            return descriptions;
+        }
+    }
+    BTreeMap::new()
+}
+
+fn automatic_layout_index(
+    mac_input_source: &str,
+    configured_layouts: &[ConfiguredLayout],
+) -> Option<u8> {
+    let source_name = mac_input_source.rsplit('.').next()?;
+    let normalized_source = normalize_layout_name(source_name);
+    if normalized_source.is_empty() {
+        return None;
+    }
+    let candidates: Vec<_> = configured_layouts
+        .iter()
+        .filter(|layout| {
+            normalize_layout_name(&layout.xkb_code) == normalized_source
+                || normalize_layout_name(&layout.description) == normalized_source
+                || layout
+                    .description
+                    .split(|character: char| !character.is_alphanumeric())
+                    .any(|word| normalize_layout_name(word) == normalized_source)
+        })
+        .map(|layout| layout.index)
+        .collect();
+    if candidates.len() == 1 {
+        Some(candidates[0])
+    } else {
+        None
+    }
+}
+
+fn normalize_layout_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn expect_next_sequence(expected: &mut u64, received: u64) -> Result<(), BridgeError> {
@@ -650,5 +789,59 @@ mod receiver_tests {
             server.join().unwrap(),
             Err(BridgeError::Handshake)
         ));
+    }
+
+    #[test]
+    fn automatic_layout_matching_is_generic_and_rejects_ambiguity() {
+        let layouts = vec![
+            ConfiguredLayout {
+                index: 0,
+                xkb_code: "us".to_owned(),
+                description: "English (US)".to_owned(),
+            },
+            ConfiguredLayout {
+                index: 1,
+                xkb_code: "ua".to_owned(),
+                description: "Ukrainian".to_owned(),
+            },
+            ConfiguredLayout {
+                index: 2,
+                xkb_code: "de".to_owned(),
+                description: "German".to_owned(),
+            },
+        ];
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.US", &layouts),
+            Some(0)
+        );
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.Ukrainian", &layouts),
+            Some(1)
+        );
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.German", &layouts),
+            Some(2)
+        );
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.Unknown", &layouts),
+            None
+        );
+
+        let ambiguous = vec![
+            ConfiguredLayout {
+                index: 0,
+                xkb_code: "us".to_owned(),
+                description: "English (US)".to_owned(),
+            },
+            ConfiguredLayout {
+                index: 1,
+                xkb_code: "us-intl".to_owned(),
+                description: "English (US, international)".to_owned(),
+            },
+        ];
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.US", &ambiguous),
+            None
+        );
     }
 }
