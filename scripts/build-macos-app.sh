@@ -6,7 +6,7 @@ build_root="$project_root/.build/release"
 app_root="$project_root/.build/MacDeckInputBridge.app"
 contents="$app_root/Contents"
 resources="$contents/Resources"
-icon_source="$project_root/assets/MacDeckInputBridgeIcon.jpg"
+icon_source="$project_root/assets/MacDeckInputBridgeIcon.png"
 signing_identity="${MAC_DECK_CODESIGN_IDENTITY:-}"
 
 if [ -z "$signing_identity" ]; then
