@@ -220,13 +220,6 @@ private struct MenuContentView: View {
         Text("Shortcut: ⌃⇧F12")
             .font(.caption)
             .foregroundStyle(.primary.opacity(0.78))
-        if model.message != nil {
-            Button(MenuBarPresentation.attentionTitle) {
-                model.showSettings()
-            }
-            .font(.caption)
-            .foregroundStyle(.primary.opacity(0.78))
-        }
         Divider()
         Button("Settings…") {
             model.showSettings()
