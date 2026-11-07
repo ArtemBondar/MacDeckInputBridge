@@ -24,6 +24,8 @@ pub enum Packet {
     Ping,
     ClientReady,
     ServerReady,
+    ServerReadyWithLayoutSync,
+    KeyboardLayout(String),
 }
 
 #[derive(Debug, Error)]
@@ -44,12 +46,21 @@ pub enum BridgeError {
 
 impl Packet {
     pub fn encode(&self) -> Vec<u8> {
-        match *self {
-            Self::Key { code, value } => vec![1, (code >> 8) as u8, code as u8, value],
+        match self {
+            Self::Key { code, value } => vec![1, (*code >> 8) as u8, *code as u8, *value],
             Self::ReleaseAll => vec![2],
             Self::Ping => vec![3],
             Self::ClientReady => vec![4],
             Self::ServerReady => vec![5],
+            Self::ServerReadyWithLayoutSync => vec![6],
+            Self::KeyboardLayout(identifier) => {
+                let bytes = identifier.as_bytes();
+                debug_assert!((1..=128).contains(&bytes.len()));
+                let mut encoded = Vec::with_capacity(bytes.len() + 2);
+                encoded.extend([7, bytes.len() as u8]);
+                encoded.extend(bytes);
+                encoded
+            }
         }
     }
 
@@ -63,6 +74,19 @@ impl Packet {
             [3] => Ok(Self::Ping),
             [4] => Ok(Self::ClientReady),
             [5] => Ok(Self::ServerReady),
+            [6] => Ok(Self::ServerReadyWithLayoutSync),
+            [7, length, identifier @ ..]
+                if (1..=128).contains(length)
+                    && identifier.len() == usize::from(*length)
+                    && identifier.iter().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    }) =>
+            {
+                Ok(Self::KeyboardLayout(
+                    String::from_utf8(identifier.to_vec())
+                        .map_err(|_| BridgeError::InvalidPacket)?,
+                ))
+            }
             _ => Err(BridgeError::InvalidPacket),
         }
     }
@@ -283,6 +307,16 @@ mod tests {
             framer.open(&frame[4..]).unwrap(),
             Packet::Key { code: 30, value: 1 }
         );
+    }
+
+    #[test]
+    fn layout_identifier_packet_accepts_only_bounded_safe_identifiers() {
+        let packet = Packet::KeyboardLayout("com.apple.keylayout.Ukrainian".to_owned());
+        assert_eq!(Packet::decode(&packet.encode()).unwrap(), packet);
+        assert!(matches!(
+            Packet::decode(&[7, 2, b'u', b' ']),
+            Err(BridgeError::InvalidPacket)
+        ));
     }
 
     #[test]
