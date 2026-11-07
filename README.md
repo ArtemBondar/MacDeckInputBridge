@@ -70,6 +70,15 @@ sh scripts/build-macos-app.sh
 open .build/MacDeckInputBridge.app
 ```
 
+To install it into your user Applications folder with its Dock icon, run:
+
+```sh
+sh scripts/install-macos-app.sh
+```
+
+Then open **MacDeckInputBridge** from Finder’s Applications folder and, if you
+want, use **Options → Keep in Dock** from its Dock icon.
+
 Grant **MacDeckInputBridge** Accessibility access only after building this app
 bundle; do not grant access to the `swift run` process. If macOS still prompts
 after a rebuild, quit the app, turn its **MacDeckInputBridge** switch off and
@@ -94,5 +103,7 @@ swift test
 `swift test` also runs AppKit UI automation for the macOS Settings window: it verifies that the window becomes key, the Host field accepts typed text, the pairing field accepts paste, and Save receives the entered values.
 
 The UI scenario matrix and contribution rule are in [`docs/UI_TESTING.md`](docs/UI_TESTING.md).
+
+The future signed GitHub release workflow is deliberately deferred until hardware testing is complete; its approval-gated plan is in [`docs/RELEASE_PLAN.md`](docs/RELEASE_PLAN.md).
 
 Run the physical-device checklist before relying on the bridge: [`docs/manual-verification.md`](docs/manual-verification.md).
