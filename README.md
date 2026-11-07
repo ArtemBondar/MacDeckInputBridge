@@ -96,7 +96,7 @@ that identity (or use `MAC_DECK_CODESIGN_IDENTITY='Apple Development: …' sh
 scripts/install-macos-app.sh` to select one). Grant Accessibility once to the
 resulting app bundle; later builds signed by that same identity retain it.
 
-Use **Settings…** to enter the Steam Deck host, port, and pairing secret. The secret is stored in the Mac Keychain, not in preferences or logs. **Show MacDeckInputBridge in Dock** is on by default for a consistent foreground Settings experience; turn it off to use the app exclusively from the menu bar. The menu-bar Steam Deck `ABC` icon shows the current destination: outlined badge for **LOCAL**, a small filled badge while **CONNECTING**, and a larger filled badge while input is being sent to the **Steam Deck**. The menu also exposes the same `Control + Shift + F12` toggle.
+Use **Settings…** to enter the Steam Deck host, port, and pairing secret. The secret is stored in the Mac Keychain, not in preferences or logs. **Show MacDeckInputBridge in Dock** is on by default for a consistent foreground Settings experience; turn it off to use the app exclusively from the menu bar. The menu-bar Steam Deck `ABC` icon uses its central screen to show status: an outlined screen for **LOCAL**, three dots while **CONNECTING**, and a filled screen while the keyboard is captured by the **Steam Deck**. The menu also exposes the same `Control + Shift + F12` toggle.
 
 ## Protocol and security model
 
