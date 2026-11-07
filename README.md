@@ -87,4 +87,6 @@ swift test
 
 `swift test` also runs AppKit UI automation for the macOS Settings window: it verifies that the window becomes key, the Host field accepts typed text, the pairing field accepts paste, and Save receives the entered values.
 
+The UI scenario matrix and contribution rule are in [`docs/UI_TESTING.md`](docs/UI_TESTING.md).
+
 Run the physical-device checklist before relying on the bridge: [`docs/manual-verification.md`](docs/manual-verification.md).
