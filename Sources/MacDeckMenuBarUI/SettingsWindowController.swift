@@ -76,6 +76,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     public func windowWillClose(_ notification: Notification) {
         // Return to a menu-bar-only presence once no editable Settings window is
         // displayed. This preserves the expected no-Dock-icon behavior.
+        onSave = nil
         NSApp.setActivationPolicy(.accessory)
     }
 
