@@ -5,6 +5,7 @@ public struct SettingsDraft: Equatable {
     public var port: String
     public var pairingSecret: String
     public var showInDock: Bool
+    public var allowLocalSecretFallback: Bool
     public var currentInputSourceID: String?
 
     public init(
@@ -12,12 +13,14 @@ public struct SettingsDraft: Equatable {
         port: String,
         pairingSecret: String,
         showInDock: Bool = true,
+        allowLocalSecretFallback: Bool = false,
         currentInputSourceID: String? = nil
     ) {
         self.host = host
         self.port = port
         self.pairingSecret = pairingSecret
         self.showInDock = showInDock
+        self.allowLocalSecretFallback = allowLocalSecretFallback
         self.currentInputSourceID = currentInputSourceID
     }
 }
@@ -32,6 +35,11 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     public let portField = NSTextField(string: "")
     public let pairingSecretField = NSSecureTextField(string: "")
     public let showInDockCheckbox = NSButton(checkboxWithTitle: "Show MacDeckInputBridge in Dock", target: nil, action: nil)
+    public let allowLocalSecretFallbackCheckbox = NSButton(
+        checkboxWithTitle: "If Keychain is unavailable, store the secret in a private local file",
+        target: nil,
+        action: nil
+    )
     public let currentInputSourceLabel = NSTextField(wrappingLabelWithString: "")
     public let messageLabel = NSTextField(wrappingLabelWithString: "")
     public let saveButton = NSButton(title: "Save", target: nil, action: nil)
@@ -40,7 +48,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     public init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 430),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 470),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -65,6 +73,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         portField.stringValue = draft.port
         pairingSecretField.stringValue = draft.pairingSecret
         showInDockCheckbox.state = draft.showInDock ? .on : .off
+        allowLocalSecretFallbackCheckbox.state = draft.allowLocalSecretFallback ? .on : .off
         currentInputSourceLabel.stringValue = draft.currentInputSourceID ?? "Unavailable"
         messageLabel.stringValue = notice ?? ""
         guard let window else { return }
@@ -104,7 +113,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             host: hostField.stringValue,
             port: portField.stringValue,
             pairingSecret: pairingSecretField.stringValue,
-            showInDock: showInDockCheckbox.state == .on
+            showInDock: showInDockCheckbox.state == .on,
+            allowLocalSecretFallback: allowLocalSecretFallbackCheckbox.state == .on
         )
         if let error = onSave?(draft) {
             messageLabel.stringValue = error
@@ -121,7 +131,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
         let deckTitle = label("Steam Deck", font: .systemFont(ofSize: 20, weight: .semibold))
         let pairingTitle = label("Pairing", font: .systemFont(ofSize: 20, weight: .semibold))
-        let guidance = NSTextField(wrappingLabelWithString: "Stored only in this Mac’s Keychain; typed keys are never stored or logged.")
+        let guidance = NSTextField(wrappingLabelWithString: "Stored in this Mac’s Keychain. If Keychain access is denied, the optional local fallback is owner-only but less secure. Typed keys are never stored or logged.")
         guidance.textColor = .secondaryLabelColor
         guidance.font = .systemFont(ofSize: 12)
         let inputSourceTitle = label("Current Mac layout ID", font: .systemFont(ofSize: 13, weight: .medium))
@@ -157,6 +167,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             pairingTitle,
             fieldRow("Pairing secret", pairingSecretField),
             guidance,
+            allowLocalSecretFallbackCheckbox,
             inputSourceTitle,
             currentInputSourceLabel,
             showInDockCheckbox,
