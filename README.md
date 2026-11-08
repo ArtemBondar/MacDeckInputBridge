@@ -1,7 +1,4 @@
 # MacDeckInputBridge
-<p align="center">
-<img width="256" height="256"  alt="MacDeckInputBridgeIcon" src="https://github.com/user-attachments/assets/871c70bc-0bd9-458b-b737-4d1b89c63186" />
-</p>
 
 Send a Mac keyboard to a Steam Deck in Desktop Mode over your local network.
 MacDeck captures physical key events on the Mac and creates a virtual keyboard
@@ -88,6 +85,9 @@ the zero-based order of the layout in Plasma, for example:
 com.apple.keylayout.US = 0
 com.apple.keylayout.Ukrainian = 1
 ```
+
+To get the value on the left, switch to that layout on the Mac, then open the
+menu-bar app's **Settings…** and copy **Current Mac layout ID**.
 
 If no match is found, key forwarding continues with the Deck's current layout.
 
