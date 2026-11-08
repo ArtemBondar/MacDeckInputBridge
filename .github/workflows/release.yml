@@ -75,17 +75,23 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets --features desktop-ui -- -D warnings
       - run: cargo test --locked --features desktop-ui
+      - run: sh scripts/test-steamdeck-app-installation.sh
       - run: cargo build --release --locked --features desktop-ui --bins
       - name: Package Steam Deck archive
         working-directory: .
         run: |
           package=dist/mac-deck-input-bridge-steamdeck-x86_64
-          mkdir -p "$package/receiver/target/release"
+          mkdir -p "$package/receiver/target/release" "$package/receiver/scripts" \
+            "$package/receiver/resources"
           install -m 755 receiver/target/release/mac-deck-receiver "$package/receiver/target/release/"
           install -m 755 receiver/target/release/mac-deck-receiver-ui "$package/receiver/target/release/"
-          cp -R receiver/scripts receiver/resources "$package/receiver/"
-          cp -R assets docs "$package/"
-          cp README.md "$package/"
+          install -m 755 receiver/scripts/install-steamdeck-app.sh "$package/receiver/scripts/"
+          install -m 755 receiver/scripts/uninstall-steamdeck-app.sh "$package/receiver/scripts/"
+          install -m 644 receiver/resources/mac-deck-input-bridge.desktop "$package/receiver/resources/"
+          install -m 644 receiver/resources/mac-deck-input-bridge.svg "$package/receiver/resources/"
+          install -m 644 assets/MacDeckInputBridgeIcon.png \
+            "$package/receiver/resources/mac-deck-input-bridge.png"
+          install -m 644 docs/STEAMDECK_APP.md "$package/README.md"
           tar -C dist -czf dist/mac-deck-input-bridge-steamdeck-x86_64.tar.gz \
             mac-deck-input-bridge-steamdeck-x86_64
           shasum -a 256 dist/mac-deck-input-bridge-steamdeck-x86_64.tar.gz \
