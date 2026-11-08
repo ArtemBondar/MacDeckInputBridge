@@ -1,155 +1,94 @@
 # MacDeckInputBridge
 
-An MVP keyboard bridge from a MacBook to a Steam Deck OLED running Desktop Mode. The macOS sender captures physical keyboard events through an active Quartz event tap; the SteamOS receiver injects Linux key events through `/dev/uinput`.
+Send a Mac keyboard to a Steam Deck in Desktop Mode over your local network.
+MacDeck captures physical key events on the Mac and creates a virtual keyboard
+on the Deck. The connection is paired, authenticated, and encrypted.
 
-It intentionally does not provide Bluetooth or trackpad forwarding, typed-content logs, or persistence of typed content. It also does not claim to suppress macOS-reserved system shortcuts.
+Use it only on a trusted network. The pairing secret is a password for your
+keyboard connection; do not share it or expose the Deck receiver to the
+Internet.
 
-## Pair and run
+## Install on Steam Deck
 
-Build the receiver on the Steam Deck:
+1. Switch to **Desktop Mode** and download
+   `mac-deck-input-bridge-steamdeck-x86_64.tar.gz` from the
+   [latest release](https://github.com/ArtemBondar/MacDeckInputBridge/releases).
+2. In Konsole:
+
+   ```sh
+   cd ~/Downloads
+   tar -xzf mac-deck-input-bridge-steamdeck-x86_64.tar.gz
+   cd mac-deck-input-bridge-steamdeck-x86_64
+   sh receiver/scripts/install-steamdeck-app.sh
+   ```
+
+3. Open **MacDeck** from the Desktop Mode application launcher.
+
+MacDeck needs access to Linux's virtual-input device. Run this once, then log
+out of Desktop Mode and back in:
 
 ```sh
-cd receiver
-cargo build --release
-./target/release/mac-deck-receiver pair
+sudo steamos-readonly disable
+sudo groupadd --system uinput
+sudo usermod -aG uinput "$USER"
+sudo tee /etc/udev/rules.d/99-mac-deck-input-bridge.rules >/dev/null <<'EOF'
+KERNEL=="uinput", MODE="0660", GROUP="uinput", OPTIONS+="static_node=uinput"
+EOF
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=misc --action=change
+sudo steamos-readonly enable
 ```
 
-Transfer the printed 32-byte Base64 secret over a trusted channel. Treat it like a password: anyone who has it and can reach the TCP listener can authenticate as a sender. Start the receiver without making the process root; an example least-privilege udev setup is in [`docs/steamos-setup.md`](docs/steamos-setup.md).
+If the `uinput` group already exists, skip only the `groupadd` command.
 
-```sh
-MAC_DECK_PAIRING_SECRET='paste-secret-here' \
-  ./target/release/mac-deck-receiver serve --bind 0.0.0.0:4242
-```
+## Install on macOS
 
-### Steam Deck Desktop Mode app
+1. Download and unzip `MacDeckInputBridge-macos.zip` from the same release.
+2. Move `MacDeckInputBridge.app` to **Applications** and open it.
+3. The current release is not notarized. On the first launch, choose **Done**
+   in the warning, then open **System Settings → Privacy & Security → Open
+   Anyway** and confirm **Open**. Only do this for a file downloaded from this
+   repository's release page.
+4. When macOS asks, allow **MacDeckInputBridge** in **Privacy & Security →
+   Accessibility**. This is required to read and forward physical key events.
 
-The native receiver app provides the receiver through a **Control** toggle and a **Settings** tab. It displays and copies the pairing secret, generates a replacement secret, and lists the Deck's local IPv4 addresses. Generating a replacement key first disables Mac input and tears down the virtual keyboard; enable it again only after updating the Mac sender with the new key.
+## Pair and use
 
-Build both binaries together so the app can launch its CLI receiver sibling:
+1. In MacDeck on the Deck, open **Settings**, generate or copy the pairing
+   secret, and note the displayed Deck IP address.
+2. In the Mac menu-bar app, open **Settings** and enter that IP address and
+   pairing secret.
+3. In MacDeck's **Control** tab, choose **Enable Mac Input**.
+4. On the Mac, choose **Send keyboard to Steam Deck** or press
+   Control–Shift–F12. Press it again to return the keyboard to the Mac.
 
-```sh
-cd receiver
-cargo build --release --locked --features desktop-ui --bins
-sh scripts/install-steamdeck-app.sh
-```
+The Mac stores the pairing secret in the macOS Keychain, not in app preferences
+or logs. macOS may ask for your account password when the app saves or updates
+that secret. The prompt authorizes access to your user Keychain so other users
+and ordinary preference files cannot read it.
 
-This installs **MacDeck** into the Steam Deck Desktop Mode application launcher.
+MacDeck can optionally sync the active Mac keyboard layout to a matching Plasma
+layout. Enable this in the Deck app's Settings tab; use manual mappings only
+for custom or ambiguous layouts.
 
-The installer places both sibling binaries in `~/.local/bin`, gives the launcher an
-absolute path to its UI binary (so Plasma does not depend on its `PATH`), and
-installs the MacDeck icon. Run it again after building a newer version. It also
-asks Plasma to refresh its application cache; if the app is not visible right
-away, log out and back in. A full checkout installs the exact macOS app icon;
-source-only archives use the matching Steam Deck silhouette instead. The
-installer also registers the asset through `xdg-icon-resource` for SteamOS
-Plasma versions that do not immediately discover user theme files. The same
-Dock PNG is embedded in the receiver window and its Wayland app ID matches the
-launcher, so the Plasma task manager groups it with the correct icon.
+## Uninstall from Steam Deck
 
-To uninstall the Desktop Mode app later, run this from the extracted release
-folder or a source checkout:
+From the extracted Steam Deck release folder, run:
 
 ```sh
 sh receiver/scripts/uninstall-steamdeck-app.sh
 ```
 
-It stops the receiver, removes the launcher, binaries, and icons, then refreshes
-Plasma's cache. It deliberately keeps your pairing settings so a reinstall does
-not require new pairing. For a full reset, remove
-`~/.config/mac-deck-input-bridge` yourself.
-
-The app stores only its listen address and pairing secret in `$XDG_CONFIG_HOME/mac-deck-input-bridge/receiver.toml` (or `~/.config/...`), with owner-only permissions. It never records forwarded key events or typed content. The receiver still needs the non-root `/dev/uinput` setup described in [`docs/steamos-setup.md`](docs/steamos-setup.md).
-
-#### Optional Mac-first layout synchronization
-
-In the Deck app’s **Settings** tab, enable **Sync active layout from Mac**. The
-receiver automatically matches the active Mac source ID against the configured
-Plasma/XKB layouts and changes the Deck only when the match is unambiguous.
-Optional manual overrides use one mapping per input source, for example:
-
-```text
-com.apple.keylayout.US = 0
-com.apple.keylayout.Ukrainian = 1
-```
-
-The number is the zero-based order of that layout in **Plasma Settings →
-Keyboard → Layouts**. This is deliberately data-driven rather than limited to a
-small language list: use an override only for a custom or ambiguous layout. The
-macOS app shows the current source ID in its **Settings** window. When a source
-cannot be matched or Plasma cannot switch it, physical-key forwarding continues
-using the Deck’s current layout.
-
-Build and run the sender on macOS:
+It removes MacDeck's launcher, binaries, and icons, but keeps pairing settings
+for a future reinstall. To remove those too:
 
 ```sh
-swift build
-.build/debug/mac-deck-sender --host 192.168.1.42 --pairing-secret 'paste-secret-here'
+rm -rf ~/.config/mac-deck-input-bridge
 ```
 
-The sender requests Accessibility permission. With the sender running, `Control + Shift + F12` starts connecting. Input remains local while connecting. Once authenticated, the same hotkey returns immediately to LOCAL mode and releases every remotely held key. On some MacBooks, use `Fn + Control + Shift + F12`.
+## Privacy and limits
 
-### macOS menu-bar app
-
-For development, run:
-
-```sh
-swift run mac-deck-menu-bar
-```
-
-For normal use, build and launch a real macOS app bundle instead of launching
-the executable from Terminal. This ensures Settings can become the foreground
-application and receive keyboard focus:
-
-```sh
-sh scripts/build-macos-app.sh
-open .build/MacDeckInputBridge.app
-```
-
-To install it into your user Applications folder with its Dock icon, run:
-
-```sh
-sh scripts/install-macos-app.sh
-```
-
-Then open **MacDeckInputBridge** from Finder’s Applications folder and, if you
-want, use **Options → Keep in Dock** from its Dock icon.
-
-Grant **MacDeckInputBridge** Accessibility access only after building this app
-bundle; do not grant access to the `swift run` process. If macOS still prompts
-after a rebuild, quit the app, turn its **MacDeckInputBridge** switch off and
-back on once in **System Settings → Privacy & Security → Accessibility**, then
-reopen `.build/MacDeckInputBridge.app`.
-
-### Keep Accessibility access across development builds
-
-macOS identifies privacy permissions through the app's code-signing designated
-requirement. An ad-hoc signature is tied to one exact build, so it causes an
-Accessibility prompt after source changes. Before repeatedly rebuilding, add
-an **Apple Development** certificate in **Xcode → Settings → Accounts → Manage
-Certificates → + → Apple Development**. The build script automatically uses
-that identity (or use `MAC_DECK_CODESIGN_IDENTITY='Apple Development: …' sh
-scripts/install-macos-app.sh` to select one). Grant Accessibility once to the
-resulting app bundle; later builds signed by that same identity retain it.
-
-Use **Settings…** to enter the Steam Deck host, port, and pairing secret. The secret is stored in the Mac Keychain, not in preferences or logs. **Show MacDeckInputBridge in Dock** is on by default for a consistent foreground Settings experience; turn it off to use the app exclusively from the menu bar. The larger menu-bar Steam Deck silhouette uses its central screen to show status: an empty outlined screen for **LOCAL**, animated zero-to-three dots while **CONNECTING**, and `ABC` only while the keyboard is captured by the **Steam Deck**. The menu also exposes the same `Control + Shift + F12` toggle.
-
-## Protocol and security model
-
-Each connection begins with a fresh 32-byte receiver challenge. Both peers use HKDF-SHA256 to derive a per-connection key from that challenge and the paired 32-byte secret, then exchange authenticated `ClientReady`/`ServerReady` records. Only then can macOS enter REMOTE mode. Every later TCP record is length-framed and encrypted with CryptoKit/Rust `ChaCha20-Poly1305`; its authenticated plaintext contains a strictly increasing 64-bit sequence number plus a key event. A captured record cannot be replayed in a different session, or twice within one session. Packets contain only an event type, Linux evdev key code, and press/release/repeat state—not text or keyboard layout output. The receiver rejects malformed, unauthenticated, replayed, or out-of-order frames, and releases held keys for every connection termination or error.
-
-Pairing is explicit: generate a secret on the receiver, transfer it out-of-band, and pass the same secret to the sender. This protects against network observation/tampering only while the secret remains confidential. Use a private Wi-Fi network, do not expose port 4242 to the Internet, and generate a new secret after any suspected disclosure.
-
-## Development
-
-```sh
-swift test
-(cd receiver && cargo test --locked --features desktop-ui)
-```
-
-`swift test` also runs AppKit UI automation for the macOS Settings window: it verifies that the window becomes key, the Host field accepts typed text, the pairing field accepts paste, and Save receives the entered values.
-
-The UI scenario matrix and contribution rule are in [`docs/UI_TESTING.md`](docs/UI_TESTING.md).
-
-The future signed GitHub release workflow is deliberately deferred until hardware testing is complete; its approval-gated plan is in [`docs/RELEASE_PLAN.md`](docs/RELEASE_PLAN.md).
-
-Run the physical-device checklist before relying on the bridge: [`docs/manual-verification.md`](docs/manual-verification.md).
+- No typed text is logged or stored.
+- The receiver runs as your Deck user; it does not run as root.
+- The bridge forwards keyboard input only—no trackpad or Bluetooth support.
+- macOS-reserved shortcuts may remain handled by macOS.
