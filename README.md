@@ -1,4 +1,7 @@
 # MacDeckInputBridge
+<p align="center">
+<img width="256" height="256"  alt="MacDeckInputBridgeIcon" src="https://github.com/user-attachments/assets/871c70bc-0bd9-458b-b737-4d1b89c63186" />
+</p>
 
 Send a Mac keyboard to a Steam Deck in Desktop Mode over your local network.
 MacDeck captures physical key events on the Mac and creates a virtual keyboard
