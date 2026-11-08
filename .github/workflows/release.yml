@@ -122,4 +122,5 @@ jobs:
           - Steam Deck installation and non-root \`/dev/uinput\` setup instructions are included in the archive.
           EOF
           gh release create "$TAG" --target "$GITHUB_SHA" --title "MacDeckInputBridge $TAG" \
-            --notes-file notes.md dist/*
+            --notes-file notes.md \
+            dist/*.zip dist/*.tar.gz dist/*.sha256
