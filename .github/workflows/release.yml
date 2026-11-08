@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       should_release: ${{ steps.version.outputs.should_release }}
+      replace_existing: ${{ steps.version.outputs.replace_existing }}
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -31,18 +32,31 @@ jobs:
               exit 1
             fi
             should_release=true
+            replace_existing=false
           else
             version="$(tr -d '\n' < VERSION)"
             tag="v$version"
             if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-              should_release=false
+              # The only mutable release path is the owner-approved correction
+              # of v0.0.1. Requiring this exact merge commit title prevents a
+              # routine future push from rewriting an existing release.
+              if [[ "$version" == "0.0.1" && \
+                "$(git log -1 --format=%s)" == "Release correction: v0.0.1" ]]; then
+                should_release=true
+                replace_existing=true
+              else
+                should_release=false
+                replace_existing=false
+              fi
             else
               should_release=true
+              replace_existing=false
             fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "should_release=$should_release" >> "$GITHUB_OUTPUT"
+          echo "replace_existing=$replace_existing" >> "$GITHUB_OUTPUT"
 
   macos:
     needs: prepare
@@ -118,6 +132,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          REPLACE_EXISTING: ${{ needs.prepare.outputs.replace_existing }}
         run: |
           cat > notes.md <<EOF
           ## MacDeckInputBridge $VERSION
@@ -127,6 +142,14 @@ jobs:
           - The macOS app is ad-hoc signed in this release; notarized distribution is planned for a later release.
           - Steam Deck installation and non-root \`/dev/uinput\` setup instructions are included in the archive.
           EOF
-          gh release create "$TAG" --target "$GITHUB_SHA" --title "MacDeckInputBridge $TAG" \
-            --notes-file notes.md \
-            dist/*.zip dist/*.tar.gz dist/*.sha256
+          if [[ "$REPLACE_EXISTING" == true ]]; then
+            git push --force origin "$GITHUB_SHA:refs/tags/$TAG"
+            gh release edit "$TAG" --target "$GITHUB_SHA" \
+              --title "MacDeckInputBridge $TAG" --notes-file notes.md
+            gh release upload "$TAG" --clobber \
+              dist/*.zip dist/*.tar.gz dist/*.sha256
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "MacDeckInputBridge $TAG" \
+              --notes-file notes.md \
+              dist/*.zip dist/*.tar.gz dist/*.sha256
+          fi
