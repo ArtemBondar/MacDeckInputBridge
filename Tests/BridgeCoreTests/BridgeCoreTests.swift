@@ -1,4 +1,5 @@
 import BridgeCore
+import Security
 import XCTest
 
 final class BridgeCoreTests: XCTestCase {
@@ -19,6 +20,12 @@ final class BridgeCoreTests: XCTestCase {
         117: 111, 118: 62, 119: 107, 120: 60, 121: 109, 122: 59, 123: 105,
         124: 106, 125: 108, 126: 103
     ]
+
+    private final class KeychainDeniedStore: PairingSecretStoring {
+        func readSecret() throws -> String? { throw BridgeSettingsError.keychain(errSecInteractionNotAllowed) }
+        func saveSecret(_: String) throws { throw BridgeSettingsError.keychain(errSecInteractionNotAllowed) }
+        func deleteSecret() throws { throw BridgeSettingsError.keychain(errSecInteractionNotAllowed) }
+    }
 
     private func remoteMachine() -> InputStateMachine {
         var machine = InputStateMachine()
@@ -152,6 +159,45 @@ final class BridgeCoreTests: XCTestCase {
         defaults.set(99_999, forKey: "deckPort")
         let store = BridgeSettingsStore(defaults: defaults, secretStore: InMemoryPairingSecretStore())
         XCTAssertEqual(store.loadSettings().port, 4242)
+    }
+
+    func testDeniedKeychainKeepsSecretInMemoryUnlessLocalFallbackIsExplicitlyEnabled() throws {
+        let suite = "MacDeckInputBridgeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let localStore = InMemoryPairingSecretStore()
+        let store = BridgeSettingsStore(
+            defaults: defaults,
+            secretStore: KeychainDeniedStore(),
+            localSecretStore: localStore
+        )
+        let secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+        XCTAssertEqual(try store.savePairingSecret(secret), .memoryOnly)
+        XCTAssertNil(try localStore.readSecret())
+
+        try store.setAllowsLocalSecretFallback(true)
+        XCTAssertEqual(try store.savePairingSecret(secret), .localPrivateFile)
+        XCTAssertEqual(try store.loadPairingSecret(), secret)
+
+        try store.setAllowsLocalSecretFallback(false)
+        XCTAssertNil(try localStore.readSecret())
+    }
+
+    func testLocalFallbackUsesAnOwnerOnlyRegularFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacDeckInputBridgeTests.\(UUID().uuidString)", isDirectory: true)
+        let secretURL = directory.appendingPathComponent("pairing-secret")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LocalPairingSecretStore(fileURL: secretURL)
+        let secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+        try store.saveSecret(secret)
+        let attributes = try FileManager.default.attributesOfItem(atPath: secretURL.path)
+        XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o600)
+        let directoryAttributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+        XCTAssertEqual(directoryAttributes[.posixPermissions] as? Int, 0o700)
+        XCTAssertEqual(try store.readSecret(), secret)
     }
 
     func testPhysicalKeyMapping() {

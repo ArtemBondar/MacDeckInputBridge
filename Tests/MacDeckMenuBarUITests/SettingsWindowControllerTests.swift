@@ -183,6 +183,25 @@ final class SettingsWindowControllerTests: XCTestCase {
         XCTAssertEqual(NSApp.activationPolicy(), .accessory)
     }
 
+    func testSavingLocalSecretFallbackChoiceDeliversTheExplicitOptIn() throws {
+        let controller = SettingsWindowController()
+        var saved: SettingsDraft?
+        controller.show(
+            draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "secret")
+        ) {
+            saved = $0
+            return nil
+        }
+        let window = try XCTUnwrap(controller.window)
+        drainMainQueue()
+
+        XCTAssertEqual(controller.allowLocalSecretFallbackCheckbox.state, .off)
+        controller.allowLocalSecretFallbackCheckbox.state = .on
+        controller.saveButton.performClick(nil)
+        XCTAssertEqual(saved?.allowLocalSecretFallback, true)
+        window.close()
+    }
+
     func testDockVisibilityPreferenceDefaultsToShownAndPersistsChoice() {
         let suite = "MacDeckMenuBarUITests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

@@ -37,6 +37,7 @@ private final class MenuBarModel: ObservableObject {
     @Published var port: String
     @Published var pairingSecret: String
     @Published var showInDock: Bool
+    @Published var allowLocalSecretFallback: Bool
     @Published var status: SenderStatus = .local
     @Published var message: String?
     @Published var connectionAnimationPhase = 0
@@ -53,6 +54,7 @@ private final class MenuBarModel: ObservableObject {
         host = settings.host
         port = String(settings.port)
         showInDock = DockVisibilityPreference.load()
+        allowLocalSecretFallback = store.allowsLocalSecretFallback
         do {
             pairingSecret = try store.loadPairingSecret() ?? ""
         } catch {
@@ -112,6 +114,7 @@ private final class MenuBarModel: ObservableObject {
                 port: port,
                 pairingSecret: pairingSecret,
                 showInDock: showInDock,
+                allowLocalSecretFallback: allowLocalSecretFallback,
                 currentInputSourceID: SenderController.currentKeyboardLayoutIdentifier()
             ),
             notice: message
@@ -126,11 +129,20 @@ private final class MenuBarModel: ObservableObject {
             port = draft.port
             pairingSecret = draft.pairingSecret
             showInDock = draft.showInDock
+            allowLocalSecretFallback = draft.allowLocalSecretFallback
             let settings = try settingsFromFields()
             try store.saveSettings(settings)
-            try store.savePairingSecret(pairingSecret)
+            try store.setAllowsLocalSecretFallback(allowLocalSecretFallback)
+            let persistence = try store.savePairingSecret(pairingSecret)
             DockVisibilityPreference.save(showInDock: showInDock)
-            message = "Saved. The next toggle will use these settings."
+            message = switch persistence {
+            case .keychain:
+                "Saved. The next toggle will use these settings."
+            case .localPrivateFile:
+                "Saved in this Mac’s private app-data folder because Keychain access is unavailable."
+            case .memoryOnly:
+                "Keychain access is unavailable. The secret will be used only until this app quits."
+            }
             return nil
         } catch {
             message = error.localizedDescription
@@ -186,7 +198,10 @@ private final class MenuBarModel: ObservableObject {
         guard !started else { return }
         let settings = try settingsFromFields()
         try store.saveSettings(settings)
-        try store.savePairingSecret(pairingSecret)
+        let persistence = try store.savePairingSecret(pairingSecret)
+        if persistence == .memoryOnly {
+            message = "Keychain access is unavailable. The secret will be used only until this app quits."
+        }
         try sender.configure(settings: settings, pairingSecret: pairingSecret)
         try sender.start()
         started = true
