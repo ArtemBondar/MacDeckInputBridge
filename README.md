@@ -67,9 +67,26 @@ or logs. macOS may ask for your account password when the app saves or updates
 that secret. The prompt authorizes access to your user Keychain so other users
 and ordinary preference files cannot read it.
 
-MacDeck can optionally sync the active Mac keyboard layout to a matching Plasma
-layout. Enable this in the Deck app's Settings tab; use manual mappings only
-for custom or ambiguous layouts.
+## Keyboard layouts
+
+MacDeck forwards physical keys, not typed characters. It works with any
+keyboard layout, but the Mac and Deck need matching active layouts for letters
+and symbols to produce the same text.
+
+Enable **Sync active layout from Mac** in MacDeck's Settings to switch the
+Deck layout automatically. MacDeck compares the Mac input-source identifier
+with the layouts configured in **Plasma Settings → Keyboard → Layouts** and
+switches only when there is one clear match.
+
+For custom or ambiguous layouts, add a manual mapping in MacDeck. The value is
+the zero-based order of the layout in Plasma, for example:
+
+```text
+com.apple.keylayout.US = 0
+com.apple.keylayout.Ukrainian = 1
+```
+
+If no match is found, key forwarding continues with the Deck's current layout.
 
 ## Uninstall from Steam Deck
 
