@@ -1,9 +1,11 @@
 # Release plan
 
-Version `0.0.1` is the first owner-approved release. The GitHub Release workflow
-builds it from `main`, runs the test suites, produces platform archives and
-checksums, then publishes a release pinned to the exact commit. Future work is
-developed on a branch and reaches `main` only when it is ready to release.
+Version `0.0.1` is the first owner-approved release. Its corrective package
+update adds the Steam Deck uninstaller and an end-user-only release archive.
+The GitHub Release workflow builds releases from `main`, runs the test suites,
+produces platform archives and checksums, then publishes a release pinned to
+the exact commit. Future work is developed on a branch and reaches `main` only
+when it is ready to release.
 
 ## Release gate
 
