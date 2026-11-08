@@ -8,6 +8,8 @@ contents="$app_root/Contents"
 resources="$contents/Resources"
 icon_source="$project_root/assets/MacDeckInputBridgeIcon.png"
 signing_identity="${MAC_DECK_CODESIGN_IDENTITY:-}"
+app_version="${MAC_DECK_APP_VERSION:-$(tr -d '\n' < "$project_root/VERSION")}"
+build_number="${MAC_DECK_BUILD_NUMBER:-1}"
 
 if [ -z "$signing_identity" ]; then
   signing_identity=$(security find-identity -v -p codesigning 2>/dev/null | \
@@ -57,9 +59,9 @@ cat > "$contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.1</string>
+  <string>$app_version</string>
   <key>CFBundleVersion</key>
-  <string>2</string>
+  <string>$build_number</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
 </dict>

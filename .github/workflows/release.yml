@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    outputs:
+      should_release: ${{ steps.version.outputs.should_release }}
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+            if [[ "$(tr -d '\n' < VERSION)" != "$version" ]]; then
+              echo "Tag $tag does not match VERSION" >&2
+              exit 1
+            fi
+            should_release=true
+          else
+            version="$(tr -d '\n' < VERSION)"
+            tag="v$version"
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              should_release=false
+            else
+              should_release=true
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "should_release=$should_release" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+      - run: MAC_DECK_APP_VERSION='${{ needs.prepare.outputs.version }}' sh scripts/build-macos-app.sh
+      - run: |
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent .build/MacDeckInputBridge.app \
+            dist/MacDeckInputBridge-macos.zip
+          shasum -a 256 dist/MacDeckInputBridge-macos.zip > dist/MacDeckInputBridge-macos.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: dist/
+
+  steamdeck:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: receiver
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxkbcommon-dev libxrandr-dev
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets --features desktop-ui -- -D warnings
+      - run: cargo test --locked --features desktop-ui
+      - run: cargo build --release --locked --features desktop-ui --bins
+      - name: Package Steam Deck archive
+        working-directory: .
+        run: |
+          package=dist/mac-deck-input-bridge-steamdeck-x86_64
+          mkdir -p "$package/receiver/target/release"
+          install -m 755 receiver/target/release/mac-deck-receiver "$package/receiver/target/release/"
+          install -m 755 receiver/target/release/mac-deck-receiver-ui "$package/receiver/target/release/"
+          cp -R receiver/scripts receiver/resources "$package/receiver/"
+          cp -R assets docs "$package/"
+          cp README.md "$package/"
+          tar -C dist -czf dist/mac-deck-input-bridge-steamdeck-x86_64.tar.gz \
+            mac-deck-input-bridge-steamdeck-x86_64
+          shasum -a 256 dist/mac-deck-input-bridge-steamdeck-x86_64.tar.gz \
+            > dist/mac-deck-input-bridge-steamdeck-x86_64.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: steamdeck-release
+          path: dist/
+
+  publish:
+    needs: [prepare, macos, steamdeck]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release from this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          cat > notes.md <<EOF
+          ## MacDeckInputBridge $VERSION
+
+          - The macOS and Steam Deck apps must be from this same release.
+          - macOS requires Accessibility permission after installation.
+          - The macOS app is ad-hoc signed in this release; notarized distribution is planned for a later release.
+          - Steam Deck installation and non-root \`/dev/uinput\` setup instructions are included in the archive.
+          EOF
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "MacDeckInputBridge $TAG" \
+            --notes-file notes.md dist/*
