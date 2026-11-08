@@ -32,6 +32,19 @@ final class BridgeCoreTests: XCTestCase {
         return machine
     }
 
+    func testReceiverStartupRetryPolicyIsBounded() {
+        let policy = ConnectionRetryPolicy.deckReceiverStartup
+        XCTAssertEqual(policy.maximumAttempts, 8)
+        XCTAssertEqual(policy.retryDelay, 0.5)
+        XCTAssertEqual(policy.handshakeTimeout, 2)
+
+        for attempt in 1..<policy.maximumAttempts {
+            XCTAssertTrue(policy.shouldRetry(afterFailedAttempt: attempt), "attempt \(attempt) should retry")
+        }
+        XCTAssertFalse(policy.shouldRetry(afterFailedAttempt: policy.maximumAttempts))
+        XCTAssertFalse(policy.shouldRetry(afterFailedAttempt: 0))
+    }
+
     func testSessionRoundTripThroughAuthenticatedFrame() throws {
         let challenge = Data(repeating: 7, count: ServerHello.challengeLength)
         var sender = try SessionFramer(pairing: pairing, challenge: challenge)

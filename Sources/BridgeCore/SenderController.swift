@@ -196,26 +196,71 @@ public enum SenderControllerError: LocalizedError {
     }
 }
 
+/// A short, bounded connection window that lets the Deck receiver finish
+/// starting after the user has already requested REMOTE mode. Retrying is only
+/// used before a session is authenticated; an established session still fails
+/// closed immediately when it disconnects.
+public struct ConnectionRetryPolicy: Equatable, Sendable {
+    /// One initial attempt plus up to seven retries gives the Deck receiver
+    /// enough time to launch without leaving the menu bar in CONNECTING forever.
+    public static let deckReceiverStartup = ConnectionRetryPolicy(
+        maximumAttempts: 8,
+        retryDelay: 0.5,
+        handshakeTimeout: 2
+    )
+
+    public let maximumAttempts: Int
+    public let retryDelay: TimeInterval
+    public let handshakeTimeout: TimeInterval
+
+    public init(maximumAttempts: Int, retryDelay: TimeInterval, handshakeTimeout: TimeInterval) {
+        precondition(maximumAttempts > 0)
+        precondition(retryDelay >= 0)
+        precondition(handshakeTimeout > 0)
+        self.maximumAttempts = maximumAttempts
+        self.retryDelay = retryDelay
+        self.handshakeTimeout = handshakeTimeout
+    }
+
+    /// `attempt` is one-based and includes the attempt that just failed.
+    public func shouldRetry(afterFailedAttempt attempt: Int) -> Bool {
+        attempt > 0 && attempt < maximumAttempts
+    }
+}
+
 private final class SenderClient {
     private static let maximumReceiveLength = SessionFramer.maximumFrameSize + 4
 
+    private struct Endpoint {
+        let host: String
+        let port: UInt16
+    }
+
     private let queue = DispatchQueue(label: "MacDeckInputBridge.transport")
     private let pairing: PairingSecret
+    private let retryPolicy: ConnectionRetryPolicy
     private var connection: NWConnection?
     private var decoder = FrameDecoder()
     private var session: SessionFramer?
     private var isReady = false
     private var nextGeneration: UInt64 = 0
     private var activeGeneration: UInt64?
+    private var nextPlan: UInt64 = 0
+    private var activePlan: UInt64?
+    private var endpoint: Endpoint?
+    private var attempt = 0
+    private var retryWorkItem: DispatchWorkItem?
+    private var handshakeTimeoutWorkItem: DispatchWorkItem?
     var onReady: ((Bool) -> Void)?
     var onFailure: (() -> Void)?
 
-    init(pairingSecret: String) throws {
+    init(pairingSecret: String, retryPolicy: ConnectionRetryPolicy = .deckReceiverStartup) throws {
         pairing = try PairingSecret(base64: pairingSecret)
+        self.retryPolicy = retryPolicy
     }
 
     func connect(host: String, port: UInt16) {
-        queue.async { [weak self] in self?.startConnection(host: host, port: port) }
+        queue.async { [weak self] in self?.beginConnection(host: host, port: port) }
     }
 
     func send(_ packet: BridgePacket) {
@@ -223,11 +268,23 @@ private final class SenderClient {
     }
 
     func close() {
-        queue.async { [weak self] in self?.invalidateActiveConnection() }
+        queue.async { [weak self] in self?.invalidateConnectionPlan() }
     }
 
-    private func startConnection(host: String, port: UInt16) {
+    private func beginConnection(host: String, port: UInt16) {
+        invalidateConnectionPlan()
+        nextPlan &+= 1
+        let plan = nextPlan
+        activePlan = plan
+        endpoint = Endpoint(host: host, port: port)
+        attempt = 0
+        startNextAttempt(plan: plan)
+    }
+
+    private func startNextAttempt(plan: UInt64) {
+        guard activePlan == plan, let endpoint else { return }
         invalidateActiveConnection()
+        attempt += 1
         nextGeneration &+= 1
         let generation = nextGeneration
         activeGeneration = generation
@@ -236,8 +293,8 @@ private final class SenderClient {
         isReady = false
 
         let connection = NWConnection(
-            host: NWEndpoint.Host(host),
-            port: NWEndpoint.Port(rawValue: port)!,
+            host: NWEndpoint.Host(endpoint.host),
+            port: NWEndpoint.Port(rawValue: endpoint.port)!,
             using: .tcp
         )
         self.connection = connection
@@ -245,6 +302,7 @@ private final class SenderClient {
             self?.handleConnectionState(state, generation: generation)
         }
         connection.start(queue: queue)
+        armHandshakeTimeout(generation: generation, plan: plan)
     }
 
     private func handleConnectionState(_ state: NWConnection.State, generation: UInt64) {
@@ -314,6 +372,8 @@ private final class SenderClient {
             throw ProtocolError.invalidFrame
         }
         isReady = true
+        handshakeTimeoutWorkItem?.cancel()
+        handshakeTimeoutWorkItem = nil
         onReady?(layoutSyncEnabled)
     }
 
@@ -337,16 +397,69 @@ private final class SenderClient {
 
     private func failActiveConnection(generation: UInt64) {
         guard activeGeneration == generation else { return }
-        let connection = self.connection
-        activeGeneration = nil
-        self.connection = nil
-        session = nil
-        isReady = false
-        connection?.cancel()
+        let wasReady = isReady
+        guard let plan = activePlan else {
+            invalidateActiveConnection()
+            return
+        }
+        invalidateActiveConnection()
+
+        if !wasReady, retryPolicy.shouldRetry(afterFailedAttempt: attempt) {
+            scheduleRetry(plan: plan)
+        } else {
+            finishConnectionPlan(plan: plan)
+        }
+    }
+
+    private func armHandshakeTimeout(generation: UInt64, plan: UInt64) {
+        handshakeTimeoutWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.handshakeTimedOut(generation: generation, plan: plan)
+        }
+        handshakeTimeoutWorkItem = workItem
+        queue.asyncAfter(deadline: .now() + retryPolicy.handshakeTimeout, execute: workItem)
+    }
+
+    private func handshakeTimedOut(generation: UInt64, plan: UInt64) {
+        guard activePlan == plan, activeGeneration == generation, !isReady else { return }
+        failActiveConnection(generation: generation)
+    }
+
+    private func scheduleRetry(plan: UInt64) {
+        retryWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.startNextAttempt(plan: plan)
+        }
+        retryWorkItem = workItem
+        queue.asyncAfter(deadline: .now() + retryPolicy.retryDelay, execute: workItem)
+    }
+
+    private func finishConnectionPlan(plan: UInt64) {
+        guard activePlan == plan else { return }
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        handshakeTimeoutWorkItem?.cancel()
+        handshakeTimeoutWorkItem = nil
+        activePlan = nil
+        endpoint = nil
+        attempt = 0
         onFailure?()
     }
 
+    private func invalidateConnectionPlan() {
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        handshakeTimeoutWorkItem?.cancel()
+        handshakeTimeoutWorkItem = nil
+        activePlan = nil
+        endpoint = nil
+        attempt = 0
+        invalidateActiveConnection()
+    }
+
     private func invalidateActiveConnection() {
+        handshakeTimeoutWorkItem?.cancel()
+        handshakeTimeoutWorkItem = nil
         let connection = self.connection
         activeGeneration = nil
         self.connection = nil
