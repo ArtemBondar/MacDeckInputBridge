@@ -46,6 +46,18 @@ Plasma versions that do not immediately discover user theme files. The same
 Dock PNG is embedded in the receiver window and its Wayland app ID matches the
 launcher, so the Plasma task manager groups it with the correct icon.
 
+To uninstall the Desktop Mode app later, run this from the extracted release
+folder or a source checkout:
+
+```sh
+sh receiver/scripts/uninstall-steamdeck-app.sh
+```
+
+It stops the receiver, removes the launcher, binaries, and icons, then refreshes
+Plasma's cache. It deliberately keeps your pairing settings so a reinstall does
+not require new pairing. For a full reset, remove
+`~/.config/mac-deck-input-bridge` yourself.
+
 The app stores only its listen address and pairing secret in `$XDG_CONFIG_HOME/mac-deck-input-bridge/receiver.toml` (or `~/.config/...`), with owner-only permissions. It never records forwarded key events or typed content. The receiver still needs the non-root `/dev/uinput` setup described in [`docs/steamos-setup.md`](docs/steamos-setup.md).
 
 #### Optional Mac-first layout synchronization

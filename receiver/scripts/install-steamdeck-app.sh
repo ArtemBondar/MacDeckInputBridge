@@ -14,8 +14,17 @@ fallback_icons_root=${MAC_DECK_INSTALL_FALLBACK_ICON_DIR:-"$HOME/.local/share/ic
 pixmaps_root=${MAC_DECK_INSTALL_PIXMAP_DIR:-"$HOME/.local/share/pixmaps"}
 ui_binary="$build_root/mac-deck-receiver-ui"
 receiver_binary="$build_root/mac-deck-receiver"
-icon_source=${MAC_DECK_ICON_SOURCE:-"$project_root/assets/MacDeckInputBridgeIcon.png"}
+bundled_icon="$receiver_root/resources/mac-deck-input-bridge.png"
+source_checkout_icon="$project_root/assets/MacDeckInputBridgeIcon.png"
+icon_source=${MAC_DECK_ICON_SOURCE:-"$bundled_icon"}
 fallback_icon="$receiver_root/resources/mac-deck-input-bridge.svg"
+
+# Release archives carry a single app icon beside the launcher resource. A
+# source checkout can still install its asset without requiring a generated
+# copy in receiver/resources.
+if [ ! -f "$icon_source" ] && [ -f "$source_checkout_icon" ]; then
+  icon_source="$source_checkout_icon"
+fi
 
 if [ ! -x "$ui_binary" ] || [ ! -x "$receiver_binary" ]; then
   echo "Missing release binaries. Run: cargo build --release --locked --features desktop-ui --bins" >&2

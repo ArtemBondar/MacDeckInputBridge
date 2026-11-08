@@ -22,3 +22,4 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets --features desktop-ui -- -D warnings
       - run: cargo test --locked --features desktop-ui
+      - run: sh scripts/test-steamdeck-app-installation.sh
