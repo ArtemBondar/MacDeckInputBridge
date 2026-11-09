@@ -6,7 +6,7 @@ build_root="$project_root/.build/release"
 app_root="$project_root/.build/MacDeckInputBridge.app"
 contents="$app_root/Contents"
 resources="$contents/Resources"
-icon_source="$project_root/assets/MacDeckInputBridgeIcon.png"
+icon_file="$project_root/assets/MacDeckInputBridgeIcon.icns"
 signing_identity="${MAC_DECK_CODESIGN_IDENTITY:-}"
 app_version="${MAC_DECK_APP_VERSION:-$(tr -d '\n' < "$project_root/VERSION")}"
 build_number="${MAC_DECK_BUILD_NUMBER:-1}"
@@ -20,26 +20,14 @@ cd "$project_root"
 swift build -c release --product mac-deck-menu-bar
 
 rm -rf "$app_root"
-mkdir -p "$contents/MacOS" "$resources/AppIcon.iconset"
+mkdir -p "$contents/MacOS" "$resources"
 cp "$build_root/mac-deck-menu-bar" "$contents/MacOS/MacDeckInputBridge"
 
-for spec in \
-  "16 icon_16x16.png" \
-  "32 icon_16x16@2x.png" \
-  "32 icon_32x32.png" \
-  "64 icon_32x32@2x.png" \
-  "128 icon_128x128.png" \
-  "256 icon_128x128@2x.png" \
-  "256 icon_256x256.png" \
-  "512 icon_256x256@2x.png" \
-  "512 icon_512x512.png" \
-  "1024 icon_512x512@2x.png"
-do
-  set -- $spec
-  sips -s format png -z "$1" "$1" "$icon_source" --out "$resources/AppIcon.iconset/$2" >/dev/null
-done
-iconutil -c icns "$resources/AppIcon.iconset" -o "$resources/AppIcon.icns"
-rm -rf "$resources/AppIcon.iconset"
+# Convert the source artwork once in the repository rather than at installation
+# time. Recent macOS icon tools can reject valid 1024 px PNG sources during
+# conversion, which made an otherwise successful app build fail to install.
+test -f "$icon_file"
+cp "$icon_file" "$resources/AppIcon.icns"
 
 cat > "$contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
