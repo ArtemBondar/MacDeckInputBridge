@@ -420,7 +420,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         ui.label("Pairing secret");
         let response = ui.text_edit_singleline(&mut self.settings.pairing_secret);
         track_focus(focus_widgets, FocusTarget::PairingSecret, &response);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let response = ui.button("Save settings");
             track_focus(focus_widgets, FocusTarget::SaveSettings, &response);
             if response.clicked() {
@@ -483,6 +483,13 @@ fn track_focus(
     target: FocusTarget,
     response: &egui::Response,
 ) {
+    // Requesting focus happens after the UI has been laid out. On the next
+    // frame, bring the focused control into view so D-pad navigation also
+    // scrolls the Settings page instead of leaving a focused control below
+    // the visible viewport.
+    if response.has_focus() {
+        response.scroll_to_me(Some(egui::Align::Center));
+    }
     focus_widgets.push((target, response.id));
 }
 
@@ -539,15 +546,28 @@ fn handle_gamepad_focus(
 /// for controller focus navigation.
 fn controller_navigation_enabled_from_environment(
     current_desktop: Option<&str>,
+    session_desktop: Option<&str>,
+    steam_app_id: Option<&str>,
     steam_game_id: Option<&str>,
 ) -> bool {
     current_desktop.is_some_and(|desktop| desktop.to_ascii_lowercase().contains("gamescope"))
+        || session_desktop
+            .is_some_and(|desktop| desktop.to_ascii_lowercase().contains("gamescope"))
+        // Steam sets SteamAppId for applications launched from Gaming Mode.
+        // SteamGameId is not set consistently for non-Steam shortcuts, so
+        // accepting both is essential for the installed desktop entry.
+        || steam_app_id.is_some_and(|id| !id.trim().is_empty())
         || steam_game_id.is_some_and(|id| !id.trim().is_empty())
 }
 
 fn controller_navigation_enabled() -> bool {
     controller_navigation_enabled_from_environment(
         env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+        env::var("XDG_SESSION_DESKTOP").ok().as_deref(),
+        env::var("SteamAppId")
+            .or_else(|_| env::var("STEAM_APP_ID"))
+            .ok()
+            .as_deref(),
         env::var("SteamGameId").ok().as_deref(),
     )
 }
@@ -577,7 +597,13 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
         }
         egui::CentralPanel::default().show(context, |ui| {
             egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
+                // Explicitly bound the scroll area to the available panel.
+                // Without this bound, a Gamescope window can grow to its
+                // content height and leave the bottom of Settings clipped
+                // instead of scrollable.
+                .max_height(ui.available_height())
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .id_salt("main-content")
                 .show(ui, |ui| match self.selected_tab {
                     Tab::Control => self.control_ui(ui, &mut focus_widgets),
                     Tab::Settings => self.settings_ui(ui, context, &mut focus_widgets),
@@ -904,17 +930,35 @@ mod tests {
     }
 
     #[test]
-    fn controller_navigation_is_enabled_only_in_gaming_mode() {
+    fn controller_navigation_is_enabled_in_gaming_mode() {
         assert!(controller_navigation_enabled_from_environment(
             Some("gamescope"),
+            None,
+            None,
             None
         ));
         assert!(controller_navigation_enabled_from_environment(
             Some("KDE"),
+            None,
+            Some("480"),
             Some("123456")
+        ));
+        assert!(controller_navigation_enabled_from_environment(
+            Some("KDE"),
+            None,
+            Some("480"),
+            None
+        ));
+        assert!(controller_navigation_enabled_from_environment(
+            Some("KDE"),
+            Some("gamescope"),
+            None,
+            None
         ));
         assert!(!controller_navigation_enabled_from_environment(
             Some("KDE"),
+            Some("KDE"),
+            None,
             None
         ));
     }
