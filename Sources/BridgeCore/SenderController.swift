@@ -17,6 +17,13 @@ public final class SenderController {
     private var layoutSyncEnabled = false
     private var layoutSynchronization = LayoutSynchronizationState()
     private var inputSourceObserver: NSObjectProtocol?
+    private var inputSourceChangeWorkItem: DispatchWorkItem?
+
+    // TIS posts its distributed notification before the current-input-source
+    // query is reliably updated on some macOS releases. A tiny main-runloop
+    // delay makes the read observe the new source, while coalescing a user
+    // cycling quickly through layouts.
+    private static let inputSourceChangeDelay = DispatchTimeInterval.milliseconds(25)
 
     public init() {
         // Text Input Services publishes this documented distributed notification
@@ -33,6 +40,7 @@ public final class SenderController {
     }
 
     deinit {
+        inputSourceChangeWorkItem?.cancel()
         if let inputSourceObserver {
             DistributedNotificationCenter.default().removeObserver(inputSourceObserver)
         }
@@ -98,7 +106,7 @@ public final class SenderController {
         runLoopSource = nil
         state.connectionLost()
         layoutSyncEnabled = false
-        layoutSynchronization.reset()
+        resetLayoutSynchronization()
         updateMode()
     }
 
@@ -107,6 +115,8 @@ public final class SenderController {
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                 state.connectionLost()
                 client?.close()
+                layoutSyncEnabled = false
+                resetLayoutSynchronization()
                 // Quartz disables a slow tap. Re-enable it only after returning to
                 // LOCAL, so an event-tap failure can never keep suppressing input.
                 if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
@@ -148,7 +158,7 @@ public final class SenderController {
 
     private func connectionReady(layoutSyncEnabled: Bool) {
         self.layoutSyncEnabled = layoutSyncEnabled
-        layoutSynchronization.reset()
+        resetLayoutSynchronization()
         state.connectionReady()
         sendCurrentLayoutIfNeeded()
         updateMode()
@@ -158,7 +168,7 @@ public final class SenderController {
         let wasConnectingOrRemote = state.mode != .local
         state.connectionLost()
         layoutSyncEnabled = false
-        layoutSynchronization.reset()
+        resetLayoutSynchronization()
         updateMode()
         if wasConnectingOrRemote { connectionFailed?() }
     }
@@ -188,9 +198,32 @@ public final class SenderController {
     }
 
     private func inputSourceDidChange() {
-        // Notification delivery uses the main queue above, the same queue that
-        // owns SenderClient and the event-tap state.
-        sendCurrentLayoutIfNeeded()
+        guard layoutSyncEnabled else { return }
+        layoutSynchronization.scheduleSourceChange()
+        inputSourceChangeWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.sendDeferredLayoutSourceChange()
+        }
+        inputSourceChangeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.inputSourceChangeDelay,
+            execute: workItem
+        )
+    }
+
+    private func sendDeferredLayoutSourceChange() {
+        inputSourceChangeWorkItem = nil
+        guard let packet = layoutSynchronization.deferredPacket(
+            for: Self.currentKeyboardLayoutIdentifier(),
+            enabled: layoutSyncEnabled
+        ) else { return }
+        client?.send(packet)
+    }
+
+    private func resetLayoutSynchronization() {
+        inputSourceChangeWorkItem?.cancel()
+        inputSourceChangeWorkItem = nil
+        layoutSynchronization.reset()
     }
 
     /// A stable, non-sensitive identifier used only for Deck layout mapping.
@@ -213,15 +246,27 @@ public final class SenderController {
 /// event tap makes source-change and reconnect behavior deterministic to test.
 struct LayoutSynchronizationState {
     private(set) var lastSentIdentifier: String?
+    private var sourceChangePending = false
 
     mutating func reset() {
         lastSentIdentifier = nil
+        sourceChangePending = false
     }
 
     mutating func nextPacket(for identifier: String?, enabled: Bool) -> BridgePacket? {
         guard enabled, let identifier, identifier != lastSentIdentifier else { return nil }
         lastSentIdentifier = identifier
         return .keyboardLayout(identifier: identifier)
+    }
+
+    mutating func scheduleSourceChange() {
+        sourceChangePending = true
+    }
+
+    mutating func deferredPacket(for identifier: String?, enabled: Bool) -> BridgePacket? {
+        guard sourceChangePending else { return nil }
+        sourceChangePending = false
+        return nextPacket(for: identifier, enabled: enabled)
     }
 }
 

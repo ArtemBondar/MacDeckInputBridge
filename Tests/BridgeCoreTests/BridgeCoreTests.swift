@@ -157,6 +157,32 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertNil(synchronization.nextPacket(for: nil, enabled: true))
     }
 
+    func testDeferredLayoutNotificationReadsOnlyThePostChangeSource() {
+        var synchronization = LayoutSynchronizationState()
+        let us = "com.apple.keylayout.US"
+        let ukrainian = "com.apple.keylayout.Ukrainian"
+
+        XCTAssertEqual(
+            synchronization.nextPacket(for: us, enabled: true),
+            .keyboardLayout(identifier: us)
+        )
+
+        // A TIS notification can arrive while the current-source query still
+        // returns `us`. The deferred read must use the later Ukrainian value;
+        // repeated notifications are coalesced into the same pending read.
+        synchronization.scheduleSourceChange()
+        synchronization.scheduleSourceChange()
+        XCTAssertEqual(
+            synchronization.deferredPacket(for: ukrainian, enabled: true),
+            .keyboardLayout(identifier: ukrainian)
+        )
+        XCTAssertNil(synchronization.deferredPacket(for: ukrainian, enabled: true))
+
+        synchronization.scheduleSourceChange()
+        synchronization.reset()
+        XCTAssertNil(synchronization.deferredPacket(for: ukrainian, enabled: true))
+    }
+
     func testSettingsStorePersistsEndpointAndKeychainSecret() throws {
         let suite = "MacDeckInputBridgeTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
