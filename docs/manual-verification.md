@@ -12,3 +12,4 @@ Perform this checklist on a MacBook and Steam Deck OLED in Desktop Mode before e
 8. In the Steam Deck app, disable Mac input while holding a remote modifier. Confirm the app stops promptly and the Deck has no stuck key or modifier. Repeat after changing receiver Settings while input is enabled.
 9. Try a macOS-reserved shortcut. Do not rely on it being suppressed: reserved shortcuts can be handled by macOS before the event tap.
 10. Confirm logs/terminal output contain lifecycle information only, never text typed on either machine.
+11. In Steam Deck Gaming Mode, open MacDeck at 1280×800. Confirm the receiver state and IP address are visible on Control, then open Settings and use the D-pad to reach every control. Focus must remain visible and scroll the page to the focused item; A/Enter must activate buttons and checkboxes. With a text field focused, use Steam + X to open the on-screen keyboard.
