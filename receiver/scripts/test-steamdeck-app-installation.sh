@@ -4,6 +4,8 @@
 set -eu
 
 receiver_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+grep -F 'cargo build --release --locked --features desktop-ui --bins' \
+  "$receiver_root/scripts/install-steamdeck-app.sh" >/dev/null
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/macdeck-install-test.XXXXXX")
 trap 'rm -rf "$test_root"' EXIT HUP INT TERM
 

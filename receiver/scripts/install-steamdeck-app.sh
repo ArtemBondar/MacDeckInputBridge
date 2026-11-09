@@ -19,6 +19,19 @@ source_checkout_icon="$project_root/assets/MacDeckInputBridgeIcon.png"
 icon_source=${MAC_DECK_ICON_SOURCE:-"$bundled_icon"}
 fallback_icon="$receiver_root/resources/mac-deck-input-bridge.svg"
 
+# A release archive intentionally ships prebuilt binaries and has no Cargo
+# manifest. A source checkout does have one, so compile it before installing:
+# otherwise `git pull` followed by this script silently reinstalls an old
+# target/release binary.
+if [ -f "$receiver_root/Cargo.toml" ] && [ -z "${MAC_DECK_BUILD_DIR:-}" ]; then
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "Cargo is required to install from a source checkout." >&2
+    exit 1
+  fi
+  echo "Building MacDeck from the current source checkout..."
+  (cd "$receiver_root" && cargo build --release --locked --features desktop-ui --bins)
+fi
+
 # Release archives carry a single app icon beside the launcher resource. A
 # source checkout can still install its asset without requiring a generated
 # copy in receiver/resources.
