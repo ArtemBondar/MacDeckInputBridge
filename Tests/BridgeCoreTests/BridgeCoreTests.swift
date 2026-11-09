@@ -1,4 +1,4 @@
-import BridgeCore
+@testable import BridgeCore
 import Security
 import XCTest
 
@@ -127,6 +127,34 @@ final class BridgeCoreTests: XCTestCase {
             BridgePacket(encoded: Data([7, 22] + Array("com.apple.keylayout.US".utf8))),
             .keyboardLayout(identifier: "com.apple.keylayout.US")
         )
+    }
+
+    func testLayoutSynchronizationSendsOnEachSourceChangeAndAfterReconnect() {
+        var synchronization = LayoutSynchronizationState()
+        let us = "com.apple.keylayout.US"
+        let ukrainian = "com.apple.keylayout.Ukrainian"
+
+        XCTAssertNil(synchronization.nextPacket(for: us, enabled: false))
+        XCTAssertEqual(
+            synchronization.nextPacket(for: us, enabled: true),
+            .keyboardLayout(identifier: us)
+        )
+        XCTAssertNil(synchronization.nextPacket(for: us, enabled: true))
+        XCTAssertEqual(
+            synchronization.nextPacket(for: ukrainian, enabled: true),
+            .keyboardLayout(identifier: ukrainian)
+        )
+        XCTAssertEqual(
+            synchronization.nextPacket(for: us, enabled: true),
+            .keyboardLayout(identifier: us)
+        )
+
+        synchronization.reset()
+        XCTAssertEqual(
+            synchronization.nextPacket(for: us, enabled: true),
+            .keyboardLayout(identifier: us)
+        )
+        XCTAssertNil(synchronization.nextPacket(for: nil, enabled: true))
     }
 
     func testSettingsStorePersistsEndpointAndKeychainSecret() throws {

@@ -103,6 +103,9 @@ To get the value on the left, switch to that layout on the Mac, then open the
 menu-bar app's **Settings…** and copy **Current Mac layout ID**.
 
 If no match is found, key forwarding continues with the Deck's current layout.
+MacDeck sends a layout update as soon as the secure connection is ready and on
+each Mac input-source change. See [Keyboard layout synchronization](docs/KEYBOARD_LAYOUT_SYNC.md)
+for matching rules and the custom-layout fallback.
 
 ## Uninstall from Steam Deck
 
