@@ -157,6 +157,109 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertNil(synchronization.nextPacket(for: nil, enabled: true))
     }
 
+    func testLayoutSourceTransitionConfirmsOldOldNewBeforeSending() {
+        var synchronization = LayoutSynchronizationState()
+        let us = "com.apple.keylayout.US"
+        let ukrainian = "com.apple.keylayout.Ukrainian"
+
+        XCTAssertEqual(
+            synchronization.nextPacket(for: us, enabled: true),
+            .keyboardLayout(identifier: us)
+        )
+
+        // A TIS notification can arrive while its source query still reports
+        // US. Two stale reads must not send US again; only the observed new
+        // source can produce a packet.
+        let generation = synchronization.beginSourceChange(currentIdentifier: us)
+        XCTAssertEqual(
+            synchronization.observeSourceChange(generation: generation, for: us, enabled: true),
+            .retry(after: LayoutSynchronizationState.sourceObservationBackoff[0])
+        )
+        XCTAssertEqual(
+            synchronization.observeSourceChange(generation: generation, for: us, enabled: true),
+            .retry(after: LayoutSynchronizationState.sourceObservationBackoff[1])
+        )
+        XCTAssertEqual(
+            synchronization.observeSourceChange(generation: generation, for: ukrainian, enabled: true),
+            .send(.keyboardLayout(identifier: ukrainian))
+        )
+        XCTAssertEqual(
+            synchronization.observeSourceChange(generation: generation, for: ukrainian, enabled: true),
+            .none
+        )
+    }
+
+    func testLayoutSourceTransitionCoalescesRapidChangesByGeneration() {
+        var synchronization = LayoutSynchronizationState()
+        let us = "com.apple.keylayout.US"
+        let ukrainian = "com.apple.keylayout.Ukrainian"
+        let polish = "com.apple.keylayout.Polish"
+        _ = synchronization.nextPacket(for: us, enabled: true)
+
+        let firstGeneration = synchronization.beginSourceChange(currentIdentifier: us)
+        XCTAssertEqual(
+            synchronization.observeSourceChange(generation: firstGeneration, for: us, enabled: true),
+            .retry(after: LayoutSynchronizationState.sourceObservationBackoff[0])
+        )
+        // A later notification replaces the pending generation. An observation
+        // from the old work item is ignored, and only the final source is sent.
+        let finalGeneration = synchronization.beginSourceChange(currentIdentifier: ukrainian)
+        XCTAssertEqual(
+            synchronization.observeSourceChange(generation: firstGeneration, for: ukrainian, enabled: true),
+            .none
+        )
+        XCTAssertEqual(
+            synchronization.observeSourceChange(generation: finalGeneration, for: polish, enabled: true),
+            .send(.keyboardLayout(identifier: polish))
+        )
+    }
+
+    func testLayoutSourceTransitionReturningToOriginalTimesOutWithoutSending() {
+        var synchronization = LayoutSynchronizationState()
+        let us = "com.apple.keylayout.US"
+        _ = synchronization.nextPacket(for: us, enabled: true)
+
+        // The user can cycle away from US and back before TIS exposes the
+        // intermediate source. The Deck is already US, so timing out without a
+        // packet is safer than guessing that a change happened.
+        let generation = synchronization.beginSourceChange(currentIdentifier: us)
+        for delay in LayoutSynchronizationState.sourceObservationBackoff {
+            XCTAssertEqual(
+                synchronization.observeSourceChange(generation: generation, for: us, enabled: true),
+                .retry(after: delay)
+            )
+        }
+        XCTAssertEqual(
+            synchronization.observeSourceChange(generation: generation, for: us, enabled: true),
+            .timedOut
+        )
+    }
+
+    func testLayoutSourceTransitionTimesOutAndCancellationSendsNothing() {
+        var synchronization = LayoutSynchronizationState()
+        let us = "com.apple.keylayout.US"
+        _ = synchronization.nextPacket(for: us, enabled: true)
+
+        let generation = synchronization.beginSourceChange(currentIdentifier: us)
+        for delay in LayoutSynchronizationState.sourceObservationBackoff {
+            XCTAssertEqual(
+                synchronization.observeSourceChange(generation: generation, for: nil, enabled: true),
+                .retry(after: delay)
+            )
+        }
+        XCTAssertEqual(
+            synchronization.observeSourceChange(generation: generation, for: nil, enabled: true),
+            .timedOut
+        )
+
+        let cancelledGeneration = synchronization.beginSourceChange(currentIdentifier: us)
+        synchronization.reset()
+        XCTAssertEqual(
+            synchronization.observeSourceChange(generation: cancelledGeneration, for: us, enabled: true),
+            .none
+        )
+    }
+
     func testSettingsStorePersistsEndpointAndKeychainSecret() throws {
         let suite = "MacDeckInputBridgeTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
