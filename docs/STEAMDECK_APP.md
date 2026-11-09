@@ -16,6 +16,9 @@ keyboard only while **Mac input** is enabled in its Control tab.
 
 3. Open **MacDeck** from the Desktop Mode application launcher.
 
+For a source checkout, the installer builds the current source automatically;
+for a release archive, it installs its prebuilt binaries.
+
 The receiver needs permission to write `/dev/uinput`, but does not need to run
 as root. Configure this once, then log out of Desktop Mode and back in:
 

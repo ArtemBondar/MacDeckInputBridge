@@ -28,6 +28,9 @@ Internet.
 
 3. Open **MacDeck** from the Desktop Mode application launcher.
 
+When installing from a source checkout, the same install script automatically
+builds the current checkout before copying the app.
+
 MacDeck needs access to Linux's virtual-input device. Run this once, then log
 out of Desktop Mode and back in:
 
