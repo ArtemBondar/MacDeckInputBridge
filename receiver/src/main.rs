@@ -7,8 +7,8 @@ use std::{
     collections::{BTreeMap, HashMap},
     env, io,
     net::{Shutdown, TcpListener, TcpStream},
-    path::PathBuf,
-    process::{Command as ProcessCommand, ExitCode},
+    path::{Path, PathBuf},
+    process::{Command as ProcessCommand, ExitCode, Output, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -208,7 +208,7 @@ impl PlasmaLayoutSwitcher {
                 .map_err(|_| "invalid Deck layout number")?;
             parsed.insert(source.to_owned(), index);
         }
-        let automatic_layouts = configured_plasma_layouts();
+        let automatic_layouts = configured_plasma_layouts(&qdbus);
         if parsed.is_empty() && automatic_layouts.is_empty() {
             return Err(
                 "no Plasma keyboard layouts were found; add layouts in Plasma Settings first"
@@ -234,18 +234,22 @@ impl PlasmaLayoutSwitcher {
             }
         };
         let index = index.to_string();
-        let status = ProcessCommand::new(&self.qdbus)
-            .args([
+        let output = qdbus_call(
+            &self.qdbus,
+            &[
                 PLASMA_KEYBOARD_LAYOUT_SERVICE,
                 PLASMA_KEYBOARD_LAYOUT_PATH,
                 PLASMA_KEYBOARD_LAYOUT_METHOD,
                 &index,
-            ])
-            .status()?;
-        if status.success() {
+            ],
+        )?;
+        if output.status.success() && qdbus_boolean_reply_accepted(&output.stdout) {
             Ok(outcome)
         } else {
-            Err(io::Error::other("Plasma rejected the layout switch"))
+            Err(io::Error::other(qdbus_failure_description(
+                "Plasma rejected the layout switch",
+                &output,
+            )))
         }
     }
 
@@ -261,16 +265,20 @@ impl PlasmaLayoutSwitcher {
     }
 
     fn status_report(&self) -> Result<String, String> {
-        let output = ProcessCommand::new(&self.qdbus)
-            .args([
+        let output = qdbus_call(
+            &self.qdbus,
+            &[
                 PLASMA_KEYBOARD_LAYOUT_SERVICE,
                 PLASMA_KEYBOARD_LAYOUT_PATH,
                 "org.kde.KeyboardLayouts.getLayout",
-            ])
-            .output()
-            .map_err(|error| format!("could not query Plasma's active layout: {error}"))?;
+            ],
+        )
+        .map_err(|error| format!("could not query Plasma's active layout: {error}"))?;
         if !output.status.success() {
-            return Err("Plasma did not answer the active-layout query".to_owned());
+            return Err(qdbus_failure_description(
+                "Plasma did not answer the active-layout query",
+                &output,
+            ));
         }
         let active = String::from_utf8_lossy(&output.stdout).trim().to_owned();
         let layouts = self
@@ -327,7 +335,57 @@ fn find_qdbus() -> Result<PathBuf, String> {
         })
 }
 
-fn configured_plasma_layouts() -> Vec<ConfiguredLayout> {
+fn qdbus_call(qdbus: &Path, arguments: &[&str]) -> io::Result<Output> {
+    const QDBUS_TIMEOUT: Duration = Duration::from_secs(1);
+    let mut child = ProcessCommand::new(qdbus)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let deadline = std::time::Instant::now() + QDBUS_TIMEOUT;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Plasma D-Bus did not answer within one second",
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn qdbus_boolean_reply_accepted(stdout: &[u8]) -> bool {
+    !matches!(
+        String::from_utf8_lossy(stdout)
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "false" | "0"
+    )
+}
+
+fn qdbus_failure_description(prefix: &str, output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let detail = if !stderr.is_empty() { stderr } else { stdout };
+    if detail.is_empty() {
+        prefix.to_owned()
+    } else {
+        format!("{prefix}: {detail}")
+    }
+}
+
+fn configured_plasma_layouts(qdbus: &Path) -> Vec<ConfiguredLayout> {
+    let runtime = runtime_plasma_layouts(qdbus);
+    if !runtime.is_empty() {
+        return runtime;
+    }
     let Some(layout_list) = read_kxkbrc_layout_list() else {
         return Vec::new();
     };
@@ -351,6 +409,72 @@ fn configured_plasma_layouts() -> Vec<ConfiguredLayout> {
             })
         })
         .collect()
+}
+
+fn runtime_plasma_layouts(qdbus: &Path) -> Vec<ConfiguredLayout> {
+    let Ok(output) = qdbus_call(
+        qdbus,
+        &[
+            "--literal",
+            PLASMA_KEYBOARD_LAYOUT_SERVICE,
+            PLASMA_KEYBOARD_LAYOUT_PATH,
+            "org.kde.KeyboardLayouts.getLayoutsList",
+        ],
+    ) else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    parse_qdbus_layout_list(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Plasma 6's `qdbus --literal` represents `a(sss)` entries as
+/// `(sss) "layout", "variant", "display name"`. The display name is the
+/// session's own human-readable name, so it matches macOS source names without
+/// a language table and still reflects user-configured variants.
+fn parse_qdbus_layout_list(output: &str) -> Vec<ConfiguredLayout> {
+    let mut layouts = Vec::new();
+    let mut remainder = output;
+    while let Some(marker) = remainder.find("(sss)") {
+        remainder = &remainder[marker + "(sss)".len()..];
+        let Some((layout, after_layout)) = next_qdbus_quoted_string(remainder) else {
+            break;
+        };
+        let Some((_variant, after_variant)) = next_qdbus_quoted_string(after_layout) else {
+            break;
+        };
+        let Some((description, after_description)) = next_qdbus_quoted_string(after_variant) else {
+            break;
+        };
+        let Ok(index) = u8::try_from(layouts.len()) else {
+            break;
+        };
+        layouts.push(ConfiguredLayout {
+            index,
+            xkb_code: layout,
+            description,
+        });
+        remainder = after_description;
+    }
+    layouts
+}
+
+fn next_qdbus_quoted_string(value: &str) -> Option<(String, &str)> {
+    let start = value.find('"')? + 1;
+    let bytes = value.as_bytes();
+    let mut escaped = false;
+    for index in start..bytes.len() {
+        match bytes[index] {
+            b'\\' if !escaped => escaped = true,
+            b'"' if !escaped => {
+                let text = value[start..index].replace(r#"\""#, "\"");
+                return Some((text, &value[index + 1..]));
+            }
+            _ => escaped = false,
+        }
+    }
+    None
 }
 
 fn read_kxkbrc_layout_list() -> Option<Vec<String>> {
@@ -1030,6 +1154,39 @@ mod receiver_tests {
             LayoutSwitchOutcome::UnchangedAmbiguous.description(),
             "multiple configured Deck layouts matched; left unchanged"
         );
+    }
+
+    #[test]
+    fn plasma_runtime_layout_names_enable_automatic_matching_without_xkb_files() {
+        let layouts = parse_qdbus_layout_list(
+            r#"[Argument: a(sss) {[Argument: (sss) "us", "", "English (US)"], [Argument: (sss) "ua", "", "Ukrainian"]}]"#,
+        );
+        assert_eq!(
+            layouts,
+            vec![
+                ConfiguredLayout {
+                    index: 0,
+                    xkb_code: "us".to_owned(),
+                    description: "English (US)".to_owned(),
+                },
+                ConfiguredLayout {
+                    index: 1,
+                    xkb_code: "ua".to_owned(),
+                    description: "Ukrainian".to_owned(),
+                },
+            ]
+        );
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.Ukrainian", &layouts),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn plasma_false_reply_is_treated_as_a_rejected_switch() {
+        assert!(!qdbus_boolean_reply_accepted(b"false\n"));
+        assert!(!qdbus_boolean_reply_accepted(b"0"));
+        assert!(qdbus_boolean_reply_accepted(b"true\n"));
     }
 
     #[test]
