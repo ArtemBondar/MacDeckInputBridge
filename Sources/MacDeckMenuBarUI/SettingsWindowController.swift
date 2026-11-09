@@ -6,6 +6,7 @@ public struct SettingsDraft: Equatable {
     public var pairingSecret: String
     public var showInDock: Bool
     public var allowLocalSecretFallback: Bool
+    public var syncClipboardFromMac: Bool
     public var currentInputSourceID: String?
 
     public init(
@@ -14,6 +15,7 @@ public struct SettingsDraft: Equatable {
         pairingSecret: String,
         showInDock: Bool = true,
         allowLocalSecretFallback: Bool = false,
+        syncClipboardFromMac: Bool = false,
         currentInputSourceID: String? = nil
     ) {
         self.host = host
@@ -21,6 +23,7 @@ public struct SettingsDraft: Equatable {
         self.pairingSecret = pairingSecret
         self.showInDock = showInDock
         self.allowLocalSecretFallback = allowLocalSecretFallback
+        self.syncClipboardFromMac = syncClipboardFromMac
         self.currentInputSourceID = currentInputSourceID
     }
 }
@@ -40,6 +43,11 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         target: nil,
         action: nil
     )
+    public let syncClipboardCheckbox = NSButton(
+        checkboxWithTitle: "Sync plain-text clipboard to Steam Deck",
+        target: nil,
+        action: nil
+    )
     public let currentInputSourceLabel = NSTextField(wrappingLabelWithString: "")
     public let messageLabel = NSTextField(wrappingLabelWithString: "")
     public let saveButton = NSButton(title: "Save", target: nil, action: nil)
@@ -48,7 +56,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     public init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 470),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -74,6 +82,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         pairingSecretField.stringValue = draft.pairingSecret
         showInDockCheckbox.state = draft.showInDock ? .on : .off
         allowLocalSecretFallbackCheckbox.state = draft.allowLocalSecretFallback ? .on : .off
+        syncClipboardCheckbox.state = draft.syncClipboardFromMac ? .on : .off
         currentInputSourceLabel.stringValue = draft.currentInputSourceID ?? "Unavailable"
         messageLabel.stringValue = notice ?? ""
         messageLabel.textColor = isInformationalNotice(notice) ? .secondaryLabelColor : .systemRed
@@ -115,7 +124,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             port: portField.stringValue,
             pairingSecret: pairingSecretField.stringValue,
             showInDock: showInDockCheckbox.state == .on,
-            allowLocalSecretFallback: allowLocalSecretFallbackCheckbox.state == .on
+            allowLocalSecretFallback: allowLocalSecretFallbackCheckbox.state == .on,
+            syncClipboardFromMac: syncClipboardCheckbox.state == .on
         )
         if let error = onSave?(draft) {
             messageLabel.stringValue = error
@@ -153,6 +163,10 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         let guidance = NSTextField(wrappingLabelWithString: "Stored in this Mac’s Keychain. If Keychain access is denied, the optional local fallback is owner-only but less secure. Typed keys are never stored or logged.")
         guidance.textColor = .secondaryLabelColor
         guidance.font = .systemFont(ofSize: 12)
+        let clipboardGuidance = NSTextField(wrappingLabelWithString: "Off by default. Sends only new plain-text clipboard changes while connected; contents are encrypted, never logged or saved, and are not sent back from Steam Deck.")
+        clipboardGuidance.textColor = .secondaryLabelColor
+        clipboardGuidance.font = .systemFont(ofSize: 12)
+        clipboardGuidance.maximumNumberOfLines = 2
         let inputSourceTitle = label("Current Mac layout ID", font: .systemFont(ofSize: 13, weight: .medium))
         currentInputSourceLabel.textColor = .secondaryLabelColor
         currentInputSourceLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -189,6 +203,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             fieldRow("Pairing secret", pairingSecretField),
             guidance,
             allowLocalSecretFallbackCheckbox,
+            syncClipboardCheckbox,
+            clipboardGuidance,
             inputSourceTitle,
             currentInputSourceLabel,
             showInDockCheckbox,

@@ -13,6 +13,9 @@ public final class SenderController {
     /// observation window. The callback deliberately contains no source ID,
     /// typed content, or pairing data.
     public var layoutSynchronizationWarning: (() -> Void)?
+    /// The receiver did not opt into clipboard transfer for this encrypted
+    /// session. The callback deliberately carries no clipboard data.
+    public var clipboardSynchronizationUnavailable: (() -> Void)?
 
     private var state = InputStateMachine()
     private var client: SenderClient?
@@ -20,7 +23,10 @@ public final class SenderController {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var layoutSyncEnabled = false
+    private var clipboardSyncEnabled = false
     private var layoutSynchronization = LayoutSynchronizationState()
+    private var clipboardSynchronization = ClipboardSynchronizationState()
+    private var clipboardTimer: Timer?
     private var inputSourceObserver: NSObjectProtocol?
     private var cocoaInputSourceObserver: NSObjectProtocol?
     private var inputSourceSettlementWorkItem: DispatchWorkItem?
@@ -48,6 +54,7 @@ public final class SenderController {
 
     deinit {
         inputSourceSettlementWorkItem?.cancel()
+        clipboardTimer?.invalidate()
         if let cocoaInputSourceObserver {
             NotificationCenter.default.removeObserver(cocoaInputSourceObserver)
         }
@@ -65,10 +72,11 @@ public final class SenderController {
 
     public func configure(settings: BridgeSettings, pairingSecret: String) throws {
         self.settings = try settings.validated()
+        stopClipboardMonitoring()
         client?.close()
         client = try SenderClient(pairingSecret: pairingSecret)
-        client?.onReady = { [weak self] layoutSyncEnabled in
-            DispatchQueue.main.async { self?.connectionReady(layoutSyncEnabled: layoutSyncEnabled) }
+        client?.onReady = { [weak self] capabilities in
+            DispatchQueue.main.async { self?.connectionReady(capabilities: capabilities) }
         }
         client?.onFailure = { [weak self] in
             DispatchQueue.main.async { self?.connectionLost() }
@@ -116,7 +124,9 @@ public final class SenderController {
         runLoopSource = nil
         state.connectionLost()
         layoutSyncEnabled = false
+        clipboardSyncEnabled = false
         resetLayoutSynchronization()
+        stopClipboardMonitoring()
         updateMode()
     }
 
@@ -126,7 +136,9 @@ public final class SenderController {
                 state.connectionLost()
                 client?.close()
                 layoutSyncEnabled = false
+                clipboardSyncEnabled = false
                 resetLayoutSynchronization()
+                stopClipboardMonitoring()
                 // Quartz disables a slow tap. Re-enable it only after returning to
                 // LOCAL, so an event-tap failure can never keep suppressing input.
                 if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
@@ -166,11 +178,17 @@ public final class SenderController {
         return suppress
     }
 
-    private func connectionReady(layoutSyncEnabled: Bool) {
-        self.layoutSyncEnabled = layoutSyncEnabled
+    private func connectionReady(capabilities: ReceiverCapabilities) {
+        layoutSyncEnabled = capabilities.layoutSynchronization
+        clipboardSyncEnabled = capabilities.clipboardSynchronization
         resetLayoutSynchronization()
         state.connectionReady()
         sendCurrentLayoutIfNeeded()
+        if settings?.syncClipboardFromMac == true, clipboardSyncEnabled {
+            startClipboardMonitoring()
+        } else if settings?.syncClipboardFromMac == true {
+            clipboardSynchronizationUnavailable?()
+        }
         updateMode()
     }
 
@@ -178,7 +196,9 @@ public final class SenderController {
         let wasConnectingOrRemote = state.mode != .local
         state.connectionLost()
         layoutSyncEnabled = false
+        clipboardSyncEnabled = false
         resetLayoutSynchronization()
+        stopClipboardMonitoring()
         updateMode()
         if wasConnectingOrRemote { connectionFailed?() }
     }
@@ -260,6 +280,35 @@ public final class SenderController {
         layoutSynchronization.reset()
     }
 
+    private func startClipboardMonitoring() {
+        stopClipboardMonitoring()
+        clipboardSynchronization.start(changeCount: NSPasteboard.general.changeCount)
+        clipboardTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.clipboardDidChange()
+        }
+    }
+
+    private func stopClipboardMonitoring() {
+        clipboardTimer?.invalidate()
+        clipboardTimer = nil
+        clipboardSynchronization.reset()
+    }
+
+    private func clipboardDidChange() {
+        guard mode == .remote,
+              settings?.syncClipboardFromMac == true,
+              clipboardSyncEnabled,
+              let text = NSPasteboard.general.string(forType: .string),
+              let packets = clipboardSynchronization.packetsForChange(
+                  changeCount: NSPasteboard.general.changeCount,
+                  text: text,
+                  origin: .mac
+              ) else { return }
+        // Clipboard contents remain in memory only, are encrypted by SenderClient,
+        // and are never written to diagnostics, preferences, or logs.
+        packets.forEach { client?.send($0) }
+    }
+
     /// A stable, non-sensitive identifier used only for Deck layout mapping.
     /// It never represents typed content.
     public static func currentKeyboardLayoutIdentifier() -> String? {
@@ -273,6 +322,40 @@ public final class SenderController {
                 (97...122).contains($0) || $0 == 45 || $0 == 46 || $0 == 95
         }
         return allowed && !identifier.isEmpty && identifier.utf8.count <= 128 ? identifier : nil
+    }
+}
+
+struct ReceiverCapabilities: Equatable {
+    let layoutSynchronization: Bool
+    let clipboardSynchronization: Bool
+}
+
+/// Records only the pasteboard change counter. Starting a session establishes
+/// a baseline, so a sensitive value copied before opt-in or connection is
+/// never transferred. It has no persistence and no content logging path.
+struct ClipboardSynchronizationState {
+    private var lastChangeCount: Int?
+    private var nextTransferID: UInt64 = 0
+
+    mutating func start(changeCount: Int) {
+        lastChangeCount = changeCount
+    }
+
+    mutating func reset() {
+        lastChangeCount = nil
+        nextTransferID = 0
+    }
+
+    mutating func packetsForChange(
+        changeCount: Int,
+        text: String,
+        origin: ClipboardOrigin
+    ) -> [BridgePacket]? {
+        guard let previousChangeCount = lastChangeCount else { return nil }
+        guard changeCount != previousChangeCount else { return nil }
+        lastChangeCount = changeCount
+        nextTransferID &+= 1
+        return BridgePacket.clipboardPackets(origin: origin, transferID: nextTransferID, text: text)
     }
 }
 
@@ -433,7 +516,7 @@ private final class SenderClient {
     private var attempt = 0
     private var retryWorkItem: DispatchWorkItem?
     private var handshakeTimeoutWorkItem: DispatchWorkItem?
-    var onReady: ((Bool) -> Void)?
+    var onReady: ((ReceiverCapabilities) -> Void)?
     var onFailure: (() -> Void)?
 
     init(pairingSecret: String, retryPolicy: ConnectionRetryPolicy = .deckReceiverStartup) throws {
@@ -544,19 +627,23 @@ private final class SenderClient {
         let packet = try session.open(combined: frame)
         self.session = session
         guard !isReady else { throw ProtocolError.invalidFrame }
-        let layoutSyncEnabled: Bool
+        let capabilities: ReceiverCapabilities
         switch packet {
         case .serverReady:
-            layoutSyncEnabled = false
+            capabilities = ReceiverCapabilities(layoutSynchronization: false, clipboardSynchronization: false)
         case .serverReadyWithLayoutSync:
-            layoutSyncEnabled = true
+            capabilities = ReceiverCapabilities(layoutSynchronization: true, clipboardSynchronization: false)
+        case .serverReadyWithClipboardSync:
+            capabilities = ReceiverCapabilities(layoutSynchronization: false, clipboardSynchronization: true)
+        case .serverReadyWithLayoutAndClipboardSync:
+            capabilities = ReceiverCapabilities(layoutSynchronization: true, clipboardSynchronization: true)
         default:
             throw ProtocolError.invalidFrame
         }
         isReady = true
         handshakeTimeoutWorkItem?.cancel()
         handshakeTimeoutWorkItem = nil
-        onReady?(layoutSyncEnabled)
+        onReady?(capabilities)
     }
 
     private func sendApplicationPacket(_ packet: BridgePacket) {

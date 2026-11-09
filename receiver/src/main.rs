@@ -1,7 +1,7 @@
 use clap::{ArgAction, Parser, Subcommand};
 use mac_deck_receiver::{
-    derive_session_secret, generate_challenge, write_server_hello, BridgeError, Packet,
-    PairingSecret, SessionFramer,
+    derive_session_secret, generate_challenge, write_server_hello, BridgeError, ClipboardOrigin,
+    Packet, PairingSecret, SessionFramer, MAX_CLIPBOARD_TEXT_BYTES,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -16,6 +16,7 @@ use std::{
     thread,
     time::Duration,
 };
+use wl_clipboard_rs::copy::{MimeType, Options as ClipboardOptions, Source as ClipboardSource};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -44,6 +45,9 @@ enum Command {
         /// One mapping in the form com.apple.keylayout.US=0. Repeat for each layout.
         #[arg(long = "layout-mapping", action = ArgAction::Append)]
         layout_mappings: Vec<String>,
+        /// Allow the paired Mac to write plain text to this Plasma clipboard.
+        #[arg(long)]
+        sync_clipboard_from_mac: bool,
     },
     /// Check whether this Plasma session can switch configured keyboard layouts.
     LayoutStatus {
@@ -58,6 +62,95 @@ trait KeySink {
     fn release_all(&mut self) -> io::Result<()>;
 }
 
+trait ClipboardSink {
+    fn set_text(&mut self, text: &str) -> Result<(), String>;
+}
+
+struct WaylandClipboardSink;
+
+impl WaylandClipboardSink {
+    fn new() -> Result<Self, String> {
+        let runtime = env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
+            "no active Wayland runtime; open MacDeck in Steam Deck Desktop Mode".to_owned()
+        })?;
+        let display = env::var_os("WAYLAND_DISPLAY").ok_or_else(|| {
+            "no active Wayland display; open MacDeck in Steam Deck Desktop Mode".to_owned()
+        })?;
+        if runtime.is_empty() || display.is_empty() {
+            return Err(
+                "no active Wayland session; open MacDeck in Steam Deck Desktop Mode".to_owned(),
+            );
+        }
+        Ok(Self)
+    }
+}
+
+impl ClipboardSink for WaylandClipboardSink {
+    fn set_text(&mut self, text: &str) -> Result<(), String> {
+        ClipboardOptions::new()
+            .copy(
+                ClipboardSource::Bytes(text.as_bytes().to_vec().into()),
+                MimeType::Text,
+            )
+            .map_err(|_| "could not write text to the Wayland clipboard".to_owned())
+    }
+}
+
+struct ClipboardTransfer {
+    transfer_id: u64,
+    total_bytes: usize,
+    chunk_count: u16,
+    next_index: u16,
+    bytes: Vec<u8>,
+}
+
+impl ClipboardTransfer {
+    fn begin(transfer_id: u64, total_bytes: u32, chunk_count: u16) -> Result<Self, BridgeError> {
+        let total_bytes = usize::try_from(total_bytes).map_err(|_| BridgeError::InvalidPacket)?;
+        if total_bytes > MAX_CLIPBOARD_TEXT_BYTES {
+            return Err(BridgeError::InvalidPacket);
+        }
+        Ok(Self {
+            transfer_id,
+            total_bytes,
+            chunk_count,
+            next_index: 0,
+            bytes: Vec::with_capacity(total_bytes),
+        })
+    }
+
+    fn append(&mut self, transfer_id: u64, index: u16, bytes: &[u8]) -> Result<(), BridgeError> {
+        if transfer_id != self.transfer_id || index != self.next_index || index >= self.chunk_count
+        {
+            return Err(BridgeError::InvalidPacket);
+        }
+        let next_length = self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .ok_or(BridgeError::InvalidPacket)?;
+        if next_length > self.total_bytes {
+            return Err(BridgeError::InvalidPacket);
+        }
+        self.bytes.extend_from_slice(bytes);
+        self.next_index = self
+            .next_index
+            .checked_add(1)
+            .ok_or(BridgeError::InvalidPacket)?;
+        Ok(())
+    }
+
+    fn finish(self, transfer_id: u64) -> Result<String, BridgeError> {
+        if transfer_id != self.transfer_id
+            || self.next_index != self.chunk_count
+            || self.bytes.len() != self.total_bytes
+        {
+            return Err(BridgeError::InvalidPacket);
+        }
+        String::from_utf8(self.bytes).map_err(|_| BridgeError::InvalidPacket)
+    }
+}
+
 #[cfg(test)]
 fn handle_client(
     stream: &mut TcpStream,
@@ -70,7 +163,7 @@ fn handle_client(
     let session = receive_client_ready(stream, pairing_secret)?;
     session.write_packet(stream, 0, &Packet::ServerReady)?;
     let shutdown = AtomicBool::new(false);
-    handle_authenticated_client(stream, &session, sink, &shutdown, None)
+    handle_authenticated_client(stream, &session, sink, &shutdown, None, None)
 }
 
 fn receive_client_ready(
@@ -95,6 +188,7 @@ fn handle_authenticated_client(
     sink: &mut impl KeySink,
     shutdown: &AtomicBool,
     layout_switcher: Option<&PlasmaLayoutSwitcher>,
+    clipboard_sink: Option<&mut dyn ClipboardSink>,
 ) -> Result<(), BridgeError> {
     // A bounded timeout makes shutdown deterministic without treating an idle
     // keyboard as a failed session. If a partial frame spans the timeout, the
@@ -102,6 +196,8 @@ fn handle_authenticated_client(
     stream.set_read_timeout(Some(SESSION_POLL_INTERVAL))?;
     stream.set_write_timeout(None)?;
     let mut next_sequence = 1u64;
+    let mut clipboard_transfer: Option<ClipboardTransfer> = None;
+    let mut clipboard_sink = clipboard_sink;
     loop {
         if shutdown.load(Ordering::Acquire) {
             return Ok(());
@@ -136,10 +232,57 @@ fn handle_authenticated_client(
                     }
                 }
             }
+            Packet::ClipboardStart {
+                origin: ClipboardOrigin::Mac,
+                transfer_id,
+                total_bytes,
+                chunk_count,
+            } => {
+                if clipboard_sink.is_none() || clipboard_transfer.is_some() {
+                    return Err(BridgeError::InvalidPacket);
+                }
+                clipboard_transfer = Some(ClipboardTransfer::begin(
+                    transfer_id,
+                    total_bytes,
+                    chunk_count,
+                )?);
+            }
+            Packet::ClipboardChunk {
+                origin: ClipboardOrigin::Mac,
+                transfer_id,
+                index,
+                bytes,
+            } => {
+                clipboard_transfer
+                    .as_mut()
+                    .ok_or(BridgeError::InvalidPacket)?
+                    .append(transfer_id, index, &bytes)?;
+            }
+            Packet::ClipboardEnd {
+                origin: ClipboardOrigin::Mac,
+                transfer_id,
+            } => {
+                let text = clipboard_transfer
+                    .take()
+                    .ok_or(BridgeError::InvalidPacket)?
+                    .finish(transfer_id)?;
+                if let Some(sink) = clipboard_sink.as_deref_mut() {
+                    // Clipboard support is optional. A compositor failure must not
+                    // terminate keyboard forwarding or expose the copied text.
+                    if let Err(error) = sink.set_text(&text) {
+                        eprintln!("Could not update the Steam Deck clipboard: {error}");
+                    }
+                }
+            }
             Packet::Key { .. }
             | Packet::ClientReady
             | Packet::ServerReady
-            | Packet::ServerReadyWithLayoutSync => return Err(BridgeError::InvalidPacket),
+            | Packet::ServerReadyWithLayoutSync
+            | Packet::ServerReadyWithClipboardSync
+            | Packet::ServerReadyWithLayoutAndClipboardSync
+            | Packet::ClipboardStart { .. }
+            | Packet::ClipboardChunk { .. }
+            | Packet::ClipboardEnd { .. } => return Err(BridgeError::InvalidPacket),
             Packet::ReleaseAll => sink.release_all()?,
             Packet::Ping => {}
         }
@@ -853,6 +996,7 @@ fn serve(
     shutdown: Arc<AtomicBool>,
     sync_layout_from_mac: bool,
     layout_mappings: Vec<String>,
+    sync_clipboard_from_mac: bool,
 ) -> io::Result<()> {
     listener.set_nonblocking(true)?;
     let layout_switcher = if sync_layout_from_mac {
@@ -866,6 +1010,10 @@ fn serve(
     } else {
         None
     };
+    // Do the non-mutating session preflight before advertising clipboard
+    // support. A Mac therefore never starts sending clipboard bytes when the
+    // Deck is in Gaming Mode or has no active Wayland session.
+    let clipboard_available = sync_clipboard_from_mac && WaylandClipboardSink::new().is_ok();
     let sink = Arc::new(Mutex::new(sink));
     let active_session = Arc::new(AtomicBool::new(false));
     let pending_handshakes = Arc::new(AtomicUsize::new(0));
@@ -899,10 +1047,17 @@ fn serve(
                             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                             .is_ok()
                         {
-                            let ready_packet = if layout_switcher.is_some() {
-                                Packet::ServerReadyWithLayoutSync
+                            let ready_packet =
+                                match (layout_switcher.is_some(), clipboard_available) {
+                                    (false, false) => Packet::ServerReady,
+                                    (true, false) => Packet::ServerReadyWithLayoutSync,
+                                    (false, true) => Packet::ServerReadyWithClipboardSync,
+                                    (true, true) => Packet::ServerReadyWithLayoutAndClipboardSync,
+                                };
+                            let mut clipboard_sink = if clipboard_available {
+                                WaylandClipboardSink::new().ok()
                             } else {
-                                Packet::ServerReady
+                                None
                             };
                             let result = session
                                 .write_packet(&mut stream, 0, &ready_packet)
@@ -915,6 +1070,9 @@ fn serve(
                                                 &mut *sink,
                                                 &shutdown,
                                                 layout_switcher.as_deref(),
+                                                clipboard_sink
+                                                    .as_mut()
+                                                    .map(|sink| sink as &mut dyn ClipboardSink),
                                             )
                                         },
                                     )
@@ -958,6 +1116,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             pairing_secret,
             sync_layout_from_mac,
             layout_mappings,
+            sync_clipboard_from_mac,
         } => {
             let pairing_secret = PairingSecret::parse(&pairing_secret)?;
             let listener = TcpListener::bind(&bind)?;
@@ -973,6 +1132,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 shutdown,
                 sync_layout_from_mac,
                 layout_mappings,
+                sync_clipboard_from_mac,
             )?;
         }
         Command::LayoutStatus { layout_mappings } => {
@@ -1014,6 +1174,25 @@ mod receiver_tests {
             self.held.clear();
             Ok(())
         }
+    }
+
+    #[test]
+    fn clipboard_transfer_requires_order_and_exact_utf8_length() {
+        let mut transfer = ClipboardTransfer::begin(7, 5, 2).unwrap();
+        assert!(transfer.append(7, 1, b"he").is_err());
+        transfer.append(7, 0, b"hel").unwrap();
+        transfer.append(7, 1, b"lo").unwrap();
+        assert_eq!(transfer.finish(7).unwrap(), "hello");
+    }
+
+    #[test]
+    fn clipboard_transfer_rejects_malformed_and_incomplete_data() {
+        assert!(ClipboardTransfer::begin(1, (MAX_CLIPBOARD_TEXT_BYTES + 1) as u32, 1).is_err());
+        let transfer = ClipboardTransfer::begin(1, 1, 1).unwrap();
+        assert!(transfer.finish(1).is_err());
+        let mut invalid_utf8 = ClipboardTransfer::begin(2, 1, 1).unwrap();
+        invalid_utf8.append(2, 0, &[0xff]).unwrap();
+        assert!(invalid_utf8.finish(2).is_err());
     }
     #[test]
     fn release_all_clears_modifier_state() {

@@ -31,6 +31,8 @@ struct ReceiverSettings {
     #[serde(default)]
     sync_layout_from_mac: bool,
     #[serde(default)]
+    sync_clipboard_from_mac: bool,
+    #[serde(default)]
     layout_mappings: String,
 }
 
@@ -40,6 +42,7 @@ impl Default for ReceiverSettings {
             bind: "0.0.0.0:4242".to_owned(),
             pairing_secret: PairingSecret::generate().to_base64(),
             sync_layout_from_mac: false,
+            sync_clipboard_from_mac: false,
             layout_mappings: String::new(),
         }
     }
@@ -104,6 +107,7 @@ impl ReceiverSupervisor for ReceiverProcess {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .args(layout_sync_arguments(settings)?)
+            .args(clipboard_sync_arguments(settings))
             .spawn()
             .map_err(|error| format!("Could not start receiver: {error}"))?;
         self.child = Some(child);
@@ -343,6 +347,7 @@ enum FocusTarget {
     CopySecret,
     GenerateSecret,
     SyncLayout,
+    SyncClipboard,
     LayoutMappings,
     CheckLayoutSync,
     RefreshSettingsAddresses,
@@ -361,7 +366,7 @@ impl FocusTarget {
         Self::ToggleReceiver,
         Self::RefreshControlAddresses,
     ];
-    const SETTINGS_ORDER: [Self; 11] = [
+    const SETTINGS_ORDER: [Self; 12] = [
         Self::ControlTab,
         Self::SettingsTab,
         Self::ListenAddress,
@@ -370,6 +375,7 @@ impl FocusTarget {
         Self::CopySecret,
         Self::GenerateSecret,
         Self::SyncLayout,
+        Self::SyncClipboard,
         Self::LayoutMappings,
         Self::CheckLayoutSync,
         Self::RefreshSettingsAddresses,
@@ -628,6 +634,13 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             ui.small("Reports the active Plasma layout and layouts MacDeck can inspect; it does not send any keys.");
         }
         ui.add_space(16.0);
+        let response = ui.checkbox(
+            &mut self.settings.sync_clipboard_from_mac,
+            "Accept plain-text clipboard from Mac",
+        );
+        track_focus(focus_widgets, FocusTarget::SyncClipboard, &response);
+        ui.small("Off by default. Desktop Mode only; accepts new plain-text clipboard changes while connected. Contents are encrypted, never logged or saved, and are not sent back to the Mac.");
+        ui.add_space(16.0);
         ui.heading("Steam Deck IP addresses");
         for address in &self.ip_addresses {
             ui.monospace(address.to_string());
@@ -869,6 +882,14 @@ fn layout_sync_arguments(settings: &ReceiverSettings) -> Result<Vec<String>, Str
         arguments.push(mapping);
     }
     Ok(arguments)
+}
+
+fn clipboard_sync_arguments(settings: &ReceiverSettings) -> Vec<String> {
+    settings
+        .sync_clipboard_from_mac
+        .then(|| "--sync-clipboard-from-mac".to_owned())
+        .into_iter()
+        .collect()
 }
 
 fn layout_status_arguments(settings: &ReceiverSettings) -> Result<Vec<String>, String> {
@@ -1138,6 +1159,21 @@ mod tests {
             ..settings
         };
         assert!(settings.validates().is_err());
+    }
+
+    #[test]
+    fn clipboard_sync_is_off_by_default_and_only_adds_an_explicit_receiver_flag() {
+        let disabled = ReceiverSettings::default();
+        assert!(clipboard_sync_arguments(&disabled).is_empty());
+        let enabled = ReceiverSettings {
+            sync_clipboard_from_mac: true,
+            ..disabled
+        };
+        assert_eq!(
+            clipboard_sync_arguments(&enabled),
+            vec!["--sync-clipboard-from-mac".to_owned()]
+        );
+        assert!(FocusTarget::order(Tab::Settings, false).contains(&FocusTarget::SyncClipboard));
     }
 
     #[test]

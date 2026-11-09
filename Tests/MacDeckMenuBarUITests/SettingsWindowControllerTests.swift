@@ -202,6 +202,25 @@ final class SettingsWindowControllerTests: XCTestCase {
         window.close()
     }
 
+    func testClipboardSyncIsAnExplicitOptInAndSavesTheChoice() throws {
+        let controller = SettingsWindowController()
+        var saved: SettingsDraft?
+        controller.show(
+            draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "secret")
+        ) {
+            saved = $0
+            return nil
+        }
+        let window = try XCTUnwrap(controller.window)
+        drainMainQueue()
+
+        XCTAssertEqual(controller.syncClipboardCheckbox.state, .off)
+        controller.syncClipboardCheckbox.state = .on
+        controller.saveButton.performClick(nil)
+        XCTAssertEqual(saved?.syncClipboardFromMac, true)
+        window.close()
+    }
+
     func testSelectingLocalSecretFallbackReplacesKeychainErrorWithGuidance() throws {
         let controller = SettingsWindowController()
         controller.show(

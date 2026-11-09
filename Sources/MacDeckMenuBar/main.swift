@@ -38,6 +38,7 @@ private final class MenuBarModel: ObservableObject {
     @Published var pairingSecret: String
     @Published var showInDock: Bool
     @Published var allowLocalSecretFallback: Bool
+    @Published var syncClipboardFromMac: Bool
     @Published var status: SenderStatus = .local
     @Published var message: String?
     @Published var connectionAnimationPhase = 0
@@ -55,6 +56,7 @@ private final class MenuBarModel: ObservableObject {
         port = String(settings.port)
         showInDock = DockVisibilityPreference.load()
         allowLocalSecretFallback = store.allowsLocalSecretFallback
+        syncClipboardFromMac = settings.syncClipboardFromMac
         do {
             pairingSecret = try store.loadPairingSecret() ?? ""
         } catch {
@@ -71,6 +73,9 @@ private final class MenuBarModel: ObservableObject {
         }
         sender.layoutSynchronizationWarning = { [weak self] in
             self?.message = "Keyboard-layout change was not confirmed. The Steam Deck kept its previous layout; switch the Mac input source again."
+        }
+        sender.clipboardSynchronizationUnavailable = { [weak self] in
+            self?.message = "Clipboard sync is unavailable. Enable it in MacDeck Settings while the Steam Deck is in Desktop Mode."
         }
     }
 
@@ -120,6 +125,7 @@ private final class MenuBarModel: ObservableObject {
                 pairingSecret: pairingSecret,
                 showInDock: showInDock,
                 allowLocalSecretFallback: allowLocalSecretFallback,
+                syncClipboardFromMac: syncClipboardFromMac,
                 currentInputSourceID: SenderController.currentKeyboardLayoutIdentifier()
             ),
             notice: message
@@ -135,6 +141,7 @@ private final class MenuBarModel: ObservableObject {
             pairingSecret = draft.pairingSecret
             showInDock = draft.showInDock
             allowLocalSecretFallback = draft.allowLocalSecretFallback
+            syncClipboardFromMac = draft.syncClipboardFromMac
             let settings = try settingsFromFields()
             try store.saveSettings(settings)
             try store.setAllowsLocalSecretFallback(allowLocalSecretFallback)
@@ -214,7 +221,11 @@ private final class MenuBarModel: ObservableObject {
 
     private func settingsFromFields() throws -> BridgeSettings {
         guard let portValue = UInt16(port) else { throw BridgeSettingsError.invalidPort }
-        return try BridgeSettings(host: host, port: portValue).validated()
+        return try BridgeSettings(
+            host: host,
+            port: portValue,
+            syncClipboardFromMac: syncClipboardFromMac
+        ).validated()
     }
 }
 

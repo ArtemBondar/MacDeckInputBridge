@@ -107,6 +107,21 @@ MacDeck sends a layout update as soon as the secure connection is ready and on
 each Mac input-source change. See [Keyboard layout synchronization](docs/KEYBOARD_LAYOUT_SYNC.md)
 for matching rules and the custom-layout fallback.
 
+## Clipboard sync (optional)
+
+MacDeck can copy new plain-text clipboard changes from the Mac to the Steam
+Deck while the encrypted keyboard connection is active. It is off by default:
+enable **Sync plain-text clipboard to Steam Deck** in the Mac app and
+**Accept plain-text clipboard from Mac** in MacDeck’s Desktop Mode Settings,
+then reconnect the keyboard.
+
+Clipboard sync requires an active Steam Deck Desktop Mode Wayland session. It
+does not run in Gaming Mode. It sends no existing clipboard when a connection
+starts, no non-text formats, and no clipboard contents are logged or saved.
+This release is one-way only—Deck clipboard changes are not sent to the Mac.
+The encrypted packet format includes an explicit transfer origin and ID so a
+future reverse-sync option can be added without echoing changes back.
+
 ## Uninstall from Steam Deck
 
 From the extracted Steam Deck release folder, run:
@@ -125,6 +140,8 @@ rm -rf ~/.config/mac-deck-input-bridge
 ## Privacy and limits
 
 - No typed text is logged or stored.
+- Optional clipboard sync is plain UTF-8 text only; it is encrypted in transit
+  and clipboard contents are neither logged nor persisted.
 - The receiver runs as your Deck user; it does not run as root.
 - The bridge forwards keyboard input only—no trackpad or Bluetooth support.
 - macOS-reserved shortcuts may remain handled by macOS.
