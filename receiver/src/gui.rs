@@ -782,20 +782,36 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
                 });
             });
         }
-        egui::CentralPanel::default().show(context, |ui| {
-            egui::ScrollArea::vertical()
-                // Explicitly bound the scroll area to the available panel.
-                // Without this bound, a Gamescope window can grow to its
-                // content height and leave the bottom of Settings clipped
-                // instead of scrollable.
-                .max_height(ui.available_height())
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-                .id_salt("main-content")
-                .show(ui, |ui| match self.selected_tab {
-                    Tab::Control => self.control_ui(ui, &mut focus_widgets),
-                    Tab::Settings => self.settings_ui(ui, context, &mut focus_widgets),
-                });
-        });
+        egui::CentralPanel::default()
+            // Keep normal breathing room around the content, but reserve no
+            // empty strip on the right: the scroll bar should align with the
+            // window's content edge.
+            .frame(egui::Frame::default().inner_margin(egui::Margin {
+                left: 8,
+                right: 0,
+                top: 8,
+                bottom: 0,
+            }))
+            .show(context, |ui| {
+                egui::ScrollArea::vertical()
+                    // Fill the available panel width. With auto-shrink enabled,
+                    // the area followed the narrow form content and left a wide
+                    // blank strip before the scrollbar.
+                    .auto_shrink([false, false])
+                    // Explicitly bound the scroll area to the available panel.
+                    // Without this bound, a Gamescope window can grow to its
+                    // content height and leave the bottom of Settings clipped
+                    // instead of scrollable.
+                    .max_height(ui.available_height())
+                    .scroll_bar_visibility(
+                        egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
+                    )
+                    .id_salt("main-content")
+                    .show(ui, |ui| match self.selected_tab {
+                        Tab::Control => self.control_ui(ui, &mut focus_widgets),
+                        Tab::Settings => self.settings_ui(ui, context, &mut focus_widgets),
+                    });
+            });
         handle_gamepad_focus(
             context,
             &focus_widgets,
