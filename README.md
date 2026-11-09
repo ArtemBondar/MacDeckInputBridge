@@ -31,6 +31,12 @@ Internet.
 When installing from a source checkout, the same install script automatically
 builds the current checkout before copying the app.
 
+## Steam library artwork
+
+The app includes [Steam library artwork](docs/STEAM_LIBRARY_ART.md) for a local
+Steam shortcut: icon, vertical card, horizontal header, and wide banner. Steam
+requires manual artwork assignment for non-Steam shortcuts.
+
 MacDeck needs access to Linux's virtual-input device. Run this once, then log
 out of Desktop Mode and back in:
 
