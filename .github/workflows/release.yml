@@ -96,7 +96,7 @@ jobs:
         run: |
           package=dist/mac-deck-input-bridge-steamdeck-x86_64
           mkdir -p "$package/receiver/target/release" "$package/receiver/scripts" \
-            "$package/receiver/resources"
+            "$package/receiver/resources" "$package/steam-art"
           install -m 755 receiver/target/release/mac-deck-receiver "$package/receiver/target/release/"
           install -m 755 receiver/target/release/mac-deck-receiver-ui "$package/receiver/target/release/"
           install -m 755 receiver/scripts/install-steamdeck-app.sh "$package/receiver/scripts/"
@@ -106,6 +106,8 @@ jobs:
           install -m 644 assets/MacDeckInputBridgeIcon.png \
             "$package/receiver/resources/mac-deck-input-bridge.png"
           install -m 644 docs/STEAMDECK_APP.md "$package/README.md"
+          install -m 644 docs/STEAM_LIBRARY_ART.md "$package/STEAM_LIBRARY_ART.md"
+          install -m 644 assets/steam/*.png "$package/steam-art/"
           tar -C dist -czf dist/mac-deck-input-bridge-steamdeck-x86_64.tar.gz \
             mac-deck-input-bridge-steamdeck-x86_64
           shasum -a 256 dist/mac-deck-input-bridge-steamdeck-x86_64.tar.gz \
