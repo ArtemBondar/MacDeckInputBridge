@@ -15,9 +15,28 @@ public final class SenderController {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var layoutSyncEnabled = false
-    private var lastSentLayoutIdentifier: String?
+    private var layoutSynchronization = LayoutSynchronizationState()
+    private var inputSourceObserver: NSObjectProtocol?
 
-    public init() {}
+    public init() {
+        // Text Input Services publishes this documented distributed notification
+        // whenever the user changes the selected keyboard input source. Sending
+        // the source at that point avoids a race where the next key is delivered
+        // using the Deck's previous layout.
+        inputSourceObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.inputSourceDidChange()
+        }
+    }
+
+    deinit {
+        if let inputSourceObserver {
+            DistributedNotificationCenter.default().removeObserver(inputSourceObserver)
+        }
+    }
 
     /// Checks current trust without opening System Settings or showing a prompt.
     /// The menu-bar UI uses this to avoid displaying a stale permission error
@@ -79,7 +98,7 @@ public final class SenderController {
         runLoopSource = nil
         state.connectionLost()
         layoutSyncEnabled = false
-        lastSentLayoutIdentifier = nil
+        layoutSynchronization.reset()
         updateMode()
     }
 
@@ -129,8 +148,9 @@ public final class SenderController {
 
     private func connectionReady(layoutSyncEnabled: Bool) {
         self.layoutSyncEnabled = layoutSyncEnabled
-        lastSentLayoutIdentifier = nil
+        layoutSynchronization.reset()
         state.connectionReady()
+        sendCurrentLayoutIfNeeded()
         updateMode()
     }
 
@@ -138,7 +158,7 @@ public final class SenderController {
         let wasConnectingOrRemote = state.mode != .local
         state.connectionLost()
         layoutSyncEnabled = false
-        lastSentLayoutIdentifier = nil
+        layoutSynchronization.reset()
         updateMode()
         if wasConnectingOrRemote { connectionFailed?() }
     }
@@ -160,10 +180,17 @@ public final class SenderController {
     }
 
     private func sendCurrentLayoutIfNeeded() {
-        guard layoutSyncEnabled, let identifier = Self.currentKeyboardLayoutIdentifier(),
-              identifier != lastSentLayoutIdentifier else { return }
-        client?.send(.keyboardLayout(identifier: identifier))
-        lastSentLayoutIdentifier = identifier
+        guard let packet = layoutSynchronization.nextPacket(
+            for: Self.currentKeyboardLayoutIdentifier(),
+            enabled: layoutSyncEnabled
+        ) else { return }
+        client?.send(packet)
+    }
+
+    private func inputSourceDidChange() {
+        // Notification delivery uses the main queue above, the same queue that
+        // owns SenderClient and the event-tap state.
+        sendCurrentLayoutIfNeeded()
     }
 
     /// A stable, non-sensitive identifier used only for Deck layout mapping.
@@ -179,6 +206,22 @@ public final class SenderController {
                 (97...122).contains($0) || $0 == 45 || $0 == 46 || $0 == 95
         }
         return allowed && !identifier.isEmpty && identifier.utf8.count <= 128 ? identifier : nil
+    }
+}
+
+/// Tracks the last source sent on a session. Keeping this separate from the
+/// event tap makes source-change and reconnect behavior deterministic to test.
+struct LayoutSynchronizationState {
+    private(set) var lastSentIdentifier: String?
+
+    mutating func reset() {
+        lastSentIdentifier = nil
+    }
+
+    mutating func nextPacket(for identifier: String?, enabled: Bool) -> BridgePacket? {
+        guard enabled, let identifier, identifier != lastSentIdentifier else { return nil }
+        lastSentIdentifier = identifier
+        return .keyboardLayout(identifier: identifier)
     }
 }
 

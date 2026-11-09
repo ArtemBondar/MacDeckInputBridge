@@ -344,6 +344,7 @@ enum FocusTarget {
     GenerateSecret,
     SyncLayout,
     LayoutMappings,
+    CheckLayoutSync,
     RefreshSettingsAddresses,
 }
 
@@ -360,7 +361,7 @@ impl FocusTarget {
         Self::ToggleReceiver,
         Self::RefreshControlAddresses,
     ];
-    const SETTINGS_ORDER: [Self; 10] = [
+    const SETTINGS_ORDER: [Self; 11] = [
         Self::ControlTab,
         Self::SettingsTab,
         Self::ListenAddress,
@@ -370,6 +371,7 @@ impl FocusTarget {
         Self::GenerateSecret,
         Self::SyncLayout,
         Self::LayoutMappings,
+        Self::CheckLayoutSync,
         Self::RefreshSettingsAddresses,
     ];
 
@@ -615,6 +617,15 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             );
             track_focus(focus_widgets, FocusTarget::LayoutMappings, &response);
             ui.small("Standard layouts are matched automatically. Use an override only for a custom or ambiguous layout; numbers start at 0 in Plasma Settings > Keyboard > Layouts.");
+            let response = ui.button("Check Deck layout sync");
+            track_focus(focus_widgets, FocusTarget::CheckLayoutSync, &response);
+            if response.clicked() {
+                self.status = Some(match deck_layout_sync_diagnostics(&self.settings) {
+                    Ok(status) => status,
+                    Err(error) => format!("Deck layout sync check failed: {error}"),
+                });
+            }
+            ui.small("Reports the active Plasma layout and layouts MacDeck can inspect; it does not send any keys.");
         }
         ui.add_space(16.0);
         ui.heading("Steam Deck IP addresses");
@@ -860,6 +871,40 @@ fn layout_sync_arguments(settings: &ReceiverSettings) -> Result<Vec<String>, Str
     Ok(arguments)
 }
 
+fn layout_status_arguments(settings: &ReceiverSettings) -> Result<Vec<String>, String> {
+    let mappings = parse_layout_mappings(&settings.layout_mappings)?;
+    let mut arguments = vec!["layout-status".to_owned()];
+    for mapping in mappings {
+        arguments.push("--layout-mapping".to_owned());
+        arguments.push(mapping);
+    }
+    Ok(arguments)
+}
+
+fn deck_layout_sync_diagnostics(settings: &ReceiverSettings) -> Result<String, String> {
+    let executable = receiver_executable()?;
+    let output = Command::new(executable)
+        .args(layout_status_arguments(settings)?)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("could not run the layout diagnostic: {error}"))?;
+    if output.status.success() {
+        let status = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if status.is_empty() {
+            Err("the layout diagnostic returned no status".to_owned())
+        } else {
+            Ok(status)
+        }
+    } else {
+        let error = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        Err(if error.is_empty() {
+            "the receiver rejected the layout diagnostic".to_owned()
+        } else {
+            error
+        })
+    }
+}
+
 fn parse_layout_mappings(text: &str) -> Result<Vec<String>, String> {
     let mut mappings = Vec::new();
     for (line_number, raw_line) in text.lines().enumerate() {
@@ -1066,6 +1111,22 @@ mod tests {
     }
 
     #[test]
+    fn layout_status_uses_the_receiver_diagnostic_without_pairing_or_uinput() {
+        let settings = ReceiverSettings {
+            layout_mappings: "com.apple.keylayout.US = 0".to_owned(),
+            ..ReceiverSettings::default()
+        };
+        assert_eq!(
+            layout_status_arguments(&settings).unwrap(),
+            [
+                "layout-status".to_owned(),
+                "--layout-mapping".to_owned(),
+                "com.apple.keylayout.US=0".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
     fn enabled_layout_sync_allows_automatic_matching_and_validates_manual_overrides() {
         let settings = ReceiverSettings {
             sync_layout_from_mac: true,
@@ -1111,6 +1172,7 @@ mod tests {
         assert!(settings_with_mappings.contains(&FocusTarget::ListenAddress));
         assert!(settings_with_mappings.contains(&FocusTarget::PairingSecret));
         assert!(settings_with_mappings.contains(&FocusTarget::SyncLayout));
+        assert!(settings_with_mappings.contains(&FocusTarget::CheckLayoutSync));
         assert!(settings_with_mappings.contains(&FocusTarget::RefreshSettingsAddresses));
     }
 
