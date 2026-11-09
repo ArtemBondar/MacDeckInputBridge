@@ -76,6 +76,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         allowLocalSecretFallbackCheckbox.state = draft.allowLocalSecretFallback ? .on : .off
         currentInputSourceLabel.stringValue = draft.currentInputSourceID ?? "Unavailable"
         messageLabel.stringValue = notice ?? ""
+        messageLabel.textColor = isInformationalNotice(notice) ? .secondaryLabelColor : .systemRed
         guard let window else { return }
 
         // Accessory applications may still activate a window programmatically.
@@ -124,6 +125,24 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         DockVisibilityPreference.apply(showInDock: draft.showInDock)
     }
 
+    @objc private func localSecretFallbackSelectionChanged(_ sender: Any?) {
+        guard allowLocalSecretFallbackCheckbox.state == .on,
+              isKeychainRelatedNotice(messageLabel.stringValue) else { return }
+        messageLabel.stringValue = "After you click Save, the pairing secret will be stored in this Mac’s private local file."
+        messageLabel.textColor = .secondaryLabelColor
+    }
+
+    private func isKeychainRelatedNotice(_ notice: String) -> Bool {
+        notice.contains("Keychain") || notice.hasPrefix("Could not load the pairing secret")
+    }
+
+    private func isInformationalNotice(_ notice: String?) -> Bool {
+        guard let notice else { return false }
+        return notice.hasPrefix("Keychain access is unavailable") ||
+            notice.hasPrefix("After you click Save") ||
+            notice.hasPrefix("Saved in this Mac’s private app-data folder")
+    }
+
     private func buildContent(in window: NSWindow) {
         let root = NSView()
         root.translatesAutoresizingMaskIntoConstraints = false
@@ -158,6 +177,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         saveButton.target = self
         saveButton.action = #selector(save(_:))
         saveButton.keyEquivalent = "\r"
+        allowLocalSecretFallbackCheckbox.target = self
+        allowLocalSecretFallbackCheckbox.action = #selector(localSecretFallbackSelectionChanged(_:))
 
         let stack = NSStackView(views: [
             deckTitle,

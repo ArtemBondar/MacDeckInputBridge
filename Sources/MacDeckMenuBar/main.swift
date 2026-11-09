@@ -59,7 +59,9 @@ private final class MenuBarModel: ObservableObject {
             pairingSecret = try store.loadPairingSecret() ?? ""
         } catch {
             pairingSecret = ""
-            message = "Could not read the pairing secret from Keychain: \(error.localizedDescription)"
+            message = allowLocalSecretFallback
+                ? "Keychain access is unavailable. Enter the pairing secret and save to use this Mac’s private local file."
+                : "Could not load the pairing secret. Enter it again in Settings."
         }
         sender.statusChanged = { [weak self] mode in
             self?.setStatus(SenderStatus(mode: mode))
