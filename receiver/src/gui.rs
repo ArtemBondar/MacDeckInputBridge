@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32, Id, RichText};
 use get_if_addrs::{get_if_addrs, IfAddr, Interface};
 use mac_deck_receiver::PairingSecret;
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,8 @@ const APP_NAME: &str = "MacDeck";
 const APP_ID: &str = "mac-deck-input-bridge";
 const CONFIG_DIRECTORY: &str = "mac-deck-input-bridge";
 const CONFIG_FILE: &str = "receiver.toml";
+const GAMING_MODE_PREFERRED_SIZE: [f32; 2] = [960.0, 720.0];
+const MINIMUM_WINDOW_SIZE: [f32; 2] = [480.0, 360.0];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ReceiverSettings {
@@ -166,10 +168,92 @@ struct ReceiverApp<P = ReceiverProcess> {
     status: Option<String>,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Tab {
     Control,
     Settings,
+}
+
+/// Steam Input normally exposes the D-pad as arrows and the primary action as
+/// Enter/Space. Egui makes widgets keyboard-focusable, but keeps focus order
+/// dependent on the layout by default. The explicit order keeps the controller
+/// path stable when the Settings page grows or becomes scrollable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FocusTarget {
+    ControlTab,
+    SettingsTab,
+    ToggleReceiver,
+    RefreshControlAddresses,
+    ListenAddress,
+    PairingSecret,
+    SaveSettings,
+    CopySecret,
+    GenerateSecret,
+    SyncLayout,
+    LayoutMappings,
+    RefreshSettingsAddresses,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FocusDirection {
+    Previous,
+    Next,
+}
+
+impl FocusTarget {
+    const CONTROL_ORDER: [Self; 4] = [
+        Self::ControlTab,
+        Self::SettingsTab,
+        Self::ToggleReceiver,
+        Self::RefreshControlAddresses,
+    ];
+    const SETTINGS_ORDER: [Self; 10] = [
+        Self::ControlTab,
+        Self::SettingsTab,
+        Self::ListenAddress,
+        Self::PairingSecret,
+        Self::SaveSettings,
+        Self::CopySecret,
+        Self::GenerateSecret,
+        Self::SyncLayout,
+        Self::LayoutMappings,
+        Self::RefreshSettingsAddresses,
+    ];
+
+    fn order(tab: Tab, layout_sync_enabled: bool) -> Vec<Self> {
+        match tab {
+            Tab::Control => Self::CONTROL_ORDER.to_vec(),
+            Tab::Settings if layout_sync_enabled => Self::SETTINGS_ORDER.to_vec(),
+            Tab::Settings => Self::SETTINGS_ORDER
+                .into_iter()
+                .filter(|target| *target != Self::LayoutMappings)
+                .collect(),
+        }
+    }
+
+    fn is_text_entry(self) -> bool {
+        matches!(
+            self,
+            Self::ListenAddress | Self::PairingSecret | Self::LayoutMappings
+        )
+    }
+}
+
+fn next_focus_target(
+    current: Option<FocusTarget>,
+    direction: FocusDirection,
+    tab: Tab,
+    layout_sync_enabled: bool,
+) -> Option<FocusTarget> {
+    let order = FocusTarget::order(tab, layout_sync_enabled);
+    let current_index = current.and_then(|target| order.iter().position(|item| *item == target));
+    let next_index = match (direction, current_index) {
+        (FocusDirection::Previous, Some(0) | None) => order.len().checked_sub(1),
+        (FocusDirection::Previous, Some(index)) => Some(index - 1),
+        (FocusDirection::Next, Some(index)) => Some((index + 1) % order.len()),
+        (FocusDirection::Next, None) => Some(0),
+    }?;
+    order.get(next_index).copied()
 }
 
 impl ReceiverApp<ReceiverProcess> {
@@ -270,7 +354,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         self.ip_addresses = local_ipv4_addresses();
     }
 
-    fn control_ui(&mut self, ui: &mut egui::Ui) {
+    fn control_ui(&mut self, ui: &mut egui::Ui, focus_widgets: &mut Vec<(FocusTarget, Id)>) {
         let running = self.process.is_running();
         let (label, color) = if running {
             ("Mac input is enabled", Color32::from_rgb(55, 180, 100))
@@ -286,34 +370,71 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             } else {
                 "Enable Mac input"
             };
-            if ui
-                .add_sized([220.0, 42.0], egui::Button::new(toggle_label))
-                .clicked()
-            {
+            let response = ui.add_sized([260.0, 48.0], egui::Button::new(toggle_label));
+            track_focus(focus_widgets, FocusTarget::ToggleReceiver, &response);
+            if response.clicked() {
                 self.toggle_receiver();
             }
             ui.add_space(12.0);
             ui.label("When disabled, the receiver stops and releases all injected keys.");
+            ui.add_space(20.0);
+            ui.separator();
+            ui.add_space(12.0);
+            ui.label(RichText::new("Steam Deck IP addresses").strong());
+            if self.ip_addresses.is_empty() {
+                ui.label("No non-loopback IP address detected.");
+            } else {
+                for address in &self.ip_addresses {
+                    ui.monospace(address.to_string());
+                }
+            }
+            let response = ui.button("Refresh addresses");
+            track_focus(
+                focus_widgets,
+                FocusTarget::RefreshControlAddresses,
+                &response,
+            );
+            if response.clicked() {
+                self.refresh_ip_addresses();
+            }
         });
     }
 
-    fn settings_ui(&mut self, ui: &mut egui::Ui, context: &egui::Context) {
+    fn settings_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        context: &egui::Context,
+        focus_widgets: &mut Vec<(FocusTarget, Id)>,
+    ) {
         ui.heading("Receiver settings");
         ui.add_space(8.0);
+        ui.small(
+            "Controller: use the D-pad to move focus and A/Enter to activate. ".to_owned()
+                + "For a text field, use Steam + X to open the on-screen keyboard.",
+        );
+        ui.add_space(12.0);
         ui.label("Listen address");
-        ui.text_edit_singleline(&mut self.settings.bind);
+        let response = ui.text_edit_singleline(&mut self.settings.bind);
+        track_focus(focus_widgets, FocusTarget::ListenAddress, &response);
         ui.add_space(12.0);
         ui.label("Pairing secret");
-        ui.text_edit_singleline(&mut self.settings.pairing_secret);
+        let response = ui.text_edit_singleline(&mut self.settings.pairing_secret);
+        track_focus(focus_widgets, FocusTarget::PairingSecret, &response);
         ui.horizontal(|ui| {
-            if ui.button("Save settings").clicked() {
+            let response = ui.button("Save settings");
+            track_focus(focus_widgets, FocusTarget::SaveSettings, &response);
+            if response.clicked() {
                 self.apply_settings_from_ui();
             }
-            if ui.button("Copy secret").clicked() {
+            let response = ui.button("Copy secret");
+            track_focus(focus_widgets, FocusTarget::CopySecret, &response);
+            if response.clicked() {
                 context.copy_text(self.settings.pairing_secret.clone());
                 self.copied_secret_status();
             }
-            if ui.button("Generate new secret").clicked() {
+            let response = ui.button("Generate new secret");
+            track_focus(focus_widgets, FocusTarget::GenerateSecret, &response);
+            if response.clicked() {
                 // Do not leave a receiver running with a secret different from the
                 // one shown in the UI. Stopping it destroys its uinput device, so
                 // Linux releases the virtual keyboard state before re-pairing.
@@ -321,19 +442,21 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             }
         });
         ui.add_space(16.0);
-        ui.checkbox(
+        let response = ui.checkbox(
             &mut self.settings.sync_layout_from_mac,
             "Sync active layout from Mac",
         );
+        track_focus(focus_widgets, FocusTarget::SyncLayout, &response);
         ui.small("When enabled, the Mac chooses the active Deck layout before it sends keys.");
         if self.settings.sync_layout_from_mac {
             ui.add_space(6.0);
             ui.label("Manual overrides (optional; one per line: Mac input-source ID = Deck layout number)");
-            ui.add(
+            let response = ui.add(
                 egui::TextEdit::multiline(&mut self.settings.layout_mappings)
                     .desired_rows(4)
                     .hint_text("com.apple.keylayout.US = 0\ncom.apple.keylayout.Ukrainian = 1"),
             );
+            track_focus(focus_widgets, FocusTarget::LayoutMappings, &response);
             ui.small("Standard layouts are matched automatically. Use an override only for a custom or ambiguous layout; numbers start at 0 in Plasma Settings > Keyboard > Layouts.");
         }
         ui.add_space(16.0);
@@ -341,7 +464,13 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         for address in &self.ip_addresses {
             ui.monospace(address.to_string());
         }
-        if ui.button("Refresh addresses").clicked() {
+        let response = ui.button("Refresh addresses");
+        track_focus(
+            focus_widgets,
+            FocusTarget::RefreshSettingsAddresses,
+            &response,
+        );
+        if response.clicked() {
             self.refresh_ip_addresses();
         }
         ui.add_space(8.0);
@@ -349,30 +478,118 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
     }
 }
 
+fn track_focus(
+    focus_widgets: &mut Vec<(FocusTarget, Id)>,
+    target: FocusTarget,
+    response: &egui::Response,
+) {
+    focus_widgets.push((target, response.id));
+}
+
+fn handle_gamepad_focus(
+    context: &egui::Context,
+    focus_widgets: &[(FocusTarget, Id)],
+    tab: Tab,
+    layout_sync_enabled: bool,
+    controller_navigation_enabled: bool,
+) {
+    if !controller_navigation_enabled {
+        return;
+    }
+    let focused_id = context.memory(|memory| memory.focused());
+    let focused_target = focus_widgets
+        .iter()
+        .find_map(|(target, id)| (Some(*id) == focused_id).then_some(*target));
+
+    let direction = context.input(|input| {
+        if input.key_pressed(egui::Key::ArrowUp) {
+            Some(FocusDirection::Previous)
+        } else if input.key_pressed(egui::Key::ArrowDown) {
+            Some(FocusDirection::Next)
+        } else if focused_target.is_some_and(FocusTarget::is_text_entry) {
+            // In Gaming Mode, vertical D-pad movement must be able to leave a
+            // text field. Keep left/right available to Steam's on-screen
+            // keyboard for caret movement.
+            None
+        } else if input.key_pressed(egui::Key::ArrowLeft) {
+            Some(FocusDirection::Previous)
+        } else if input.key_pressed(egui::Key::ArrowRight) {
+            Some(FocusDirection::Next)
+        } else {
+            None
+        }
+    });
+
+    if let Some(direction) = direction {
+        if let Some(next) = next_focus_target(focused_target, direction, tab, layout_sync_enabled) {
+            if let Some((_, id)) = focus_widgets.iter().find(|(target, _)| *target == next) {
+                context.memory_mut(|memory| memory.request_focus(*id));
+                context.request_repaint();
+            }
+        }
+    }
+
+    if let Some(focused_id) = context.memory(|memory| memory.focused()) {
+        context.highlight_widget(focused_id);
+    }
+}
+
+/// Gamescope is the SteamOS compositor used by Gaming Mode. Desktop Mode keeps
+/// ordinary editor arrow-key behavior, while Gaming Mode reserves the D-pad
+/// for controller focus navigation.
+fn controller_navigation_enabled_from_environment(
+    current_desktop: Option<&str>,
+    steam_game_id: Option<&str>,
+) -> bool {
+    current_desktop.is_some_and(|desktop| desktop.to_ascii_lowercase().contains("gamescope"))
+        || steam_game_id.is_some_and(|id| !id.trim().is_empty())
+}
+
+fn controller_navigation_enabled() -> bool {
+    controller_navigation_enabled_from_environment(
+        env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+        env::var("SteamGameId").ok().as_deref(),
+    )
+}
+
 impl eframe::App for ReceiverApp<ReceiverProcess> {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        let mut focus_widgets = Vec::new();
         egui::TopBottomPanel::top("tabs").show(context, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.selected_tab, Tab::Control, "Control");
-                if ui
-                    .selectable_value(&mut self.selected_tab, Tab::Settings, "Settings")
-                    .changed()
-                {
+                let response = ui.selectable_value(&mut self.selected_tab, Tab::Control, "Control");
+                track_focus(&mut focus_widgets, FocusTarget::ControlTab, &response);
+                let response =
+                    ui.selectable_value(&mut self.selected_tab, Tab::Settings, "Settings");
+                track_focus(&mut focus_widgets, FocusTarget::SettingsTab, &response);
+                if response.changed() {
                     self.refresh_ip_addresses();
                 }
             });
         });
+        if let Some(status) = &self.status {
+            egui::TopBottomPanel::bottom("status").show(context, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Status:").strong());
+                    ui.label(status);
+                });
+            });
+        }
         egui::CentralPanel::default().show(context, |ui| {
-            match self.selected_tab {
-                Tab::Control => self.control_ui(ui),
-                Tab::Settings => self.settings_ui(ui, context),
-            }
-            if let Some(status) = &self.status {
-                ui.add_space(16.0);
-                ui.separator();
-                ui.label(status);
-            }
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| match self.selected_tab {
+                    Tab::Control => self.control_ui(ui, &mut focus_widgets),
+                    Tab::Settings => self.settings_ui(ui, context, &mut focus_widgets),
+                });
         });
+        handle_gamepad_focus(
+            context,
+            &focus_widgets,
+            self.selected_tab,
+            self.settings.sync_layout_from_mac,
+            controller_navigation_enabled(),
+        );
         // There is no animation. When disabled, egui can sleep until a real
         // input event arrives. Poll a running child only once per second so a
         // crash is eventually reflected in Control without waking the Deck at
@@ -539,7 +756,8 @@ fn main() -> eframe::Result<()> {
         "../../assets/MacDeckInputBridgeIcon.png"
     ));
     let viewport = egui::ViewportBuilder::default()
-        .with_inner_size([500.0, 360.0])
+        .with_inner_size(GAMING_MODE_PREFERRED_SIZE)
+        .with_min_inner_size(MINIMUM_WINDOW_SIZE)
         .with_app_id(APP_ID);
     let viewport = match icon {
         Ok(icon) => viewport.with_icon(Arc::new(icon)),
@@ -638,6 +856,93 @@ mod tests {
             "../../assets/MacDeckInputBridgeIcon.png"
         ))
         .is_ok());
+    }
+
+    #[test]
+    fn gaming_mode_uses_a_large_preferred_viewport_with_a_safe_minimum() {
+        assert_eq!(GAMING_MODE_PREFERRED_SIZE, [960.0, 720.0]);
+        assert_eq!(MINIMUM_WINDOW_SIZE, [480.0, 360.0]);
+    }
+
+    #[test]
+    fn gamepad_focus_order_includes_every_visible_control() {
+        assert_eq!(
+            FocusTarget::order(Tab::Control, false),
+            vec![
+                FocusTarget::ControlTab,
+                FocusTarget::SettingsTab,
+                FocusTarget::ToggleReceiver,
+                FocusTarget::RefreshControlAddresses,
+            ]
+        );
+        let settings_without_mappings = FocusTarget::order(Tab::Settings, false);
+        assert!(!settings_without_mappings.contains(&FocusTarget::LayoutMappings));
+        let settings_with_mappings = FocusTarget::order(Tab::Settings, true);
+        assert!(settings_with_mappings.contains(&FocusTarget::LayoutMappings));
+        assert!(settings_with_mappings.contains(&FocusTarget::ListenAddress));
+        assert!(settings_with_mappings.contains(&FocusTarget::PairingSecret));
+        assert!(settings_with_mappings.contains(&FocusTarget::SyncLayout));
+        assert!(settings_with_mappings.contains(&FocusTarget::RefreshSettingsAddresses));
+    }
+
+    #[test]
+    fn controller_navigation_keeps_horizontal_text_editing_and_uses_vertical_dpad_to_exit() {
+        assert!(FocusTarget::ListenAddress.is_text_entry());
+        assert!(FocusTarget::PairingSecret.is_text_entry());
+        assert!(FocusTarget::LayoutMappings.is_text_entry());
+        assert!(!FocusTarget::ToggleReceiver.is_text_entry());
+        assert!(!FocusTarget::SyncLayout.is_text_entry());
+        assert_eq!(
+            next_focus_target(
+                Some(FocusTarget::ListenAddress),
+                FocusDirection::Next,
+                Tab::Settings,
+                false,
+            ),
+            Some(FocusTarget::PairingSecret)
+        );
+    }
+
+    #[test]
+    fn controller_navigation_is_enabled_only_in_gaming_mode() {
+        assert!(controller_navigation_enabled_from_environment(
+            Some("gamescope"),
+            None
+        ));
+        assert!(controller_navigation_enabled_from_environment(
+            Some("KDE"),
+            Some("123456")
+        ));
+        assert!(!controller_navigation_enabled_from_environment(
+            Some("KDE"),
+            None
+        ));
+    }
+
+    #[test]
+    fn gamepad_focus_wraps_predictably_between_controls() {
+        assert_eq!(
+            next_focus_target(
+                Some(FocusTarget::ControlTab),
+                FocusDirection::Previous,
+                Tab::Control,
+                false,
+            ),
+            Some(FocusTarget::RefreshControlAddresses)
+        );
+        assert_eq!(
+            next_focus_target(
+                Some(FocusTarget::ToggleReceiver),
+                FocusDirection::Next,
+                Tab::Control,
+                false,
+            ),
+            Some(FocusTarget::RefreshControlAddresses)
+        );
+        assert_eq!(
+            next_focus_target(None, FocusDirection::Next, Tab::Settings, false),
+            Some(FocusTarget::ControlTab)
+        );
     }
 
     #[test]
