@@ -69,6 +69,9 @@ private final class MenuBarModel: ObservableObject {
         sender.connectionFailed = { [weak self] in
             self?.message = "Connection was not established. Check the Steam Deck address, pairing secret, and that Mac input is enabled on the Deck."
         }
+        sender.layoutSynchronizationWarning = { [weak self] in
+            self?.message = "Keyboard-layout change was not confirmed. The Steam Deck kept its previous layout; switch the Mac input source again."
+        }
     }
 
     func toggle() {

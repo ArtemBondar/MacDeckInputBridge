@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import Carbon
 import Foundation
 import Network
@@ -8,6 +9,10 @@ public final class SenderController {
     public private(set) var mode: BridgeMode = .local
     public var statusChanged: ((BridgeMode) -> Void)?
     public var connectionFailed: (() -> Void)?
+    /// Called when macOS never exposes a new input source within the bounded
+    /// observation window. The callback deliberately contains no source ID,
+    /// typed content, or pairing data.
+    public var layoutSynchronizationWarning: (() -> Void)?
 
     private var state = InputStateMachine()
     private var client: SenderClient?
@@ -17,12 +22,21 @@ public final class SenderController {
     private var layoutSyncEnabled = false
     private var layoutSynchronization = LayoutSynchronizationState()
     private var inputSourceObserver: NSObjectProtocol?
+    private var cocoaInputSourceObserver: NSObjectProtocol?
+    private var inputSourceSettlementWorkItem: DispatchWorkItem?
 
     public init() {
-        // Text Input Services publishes this documented distributed notification
-        // whenever the user changes the selected keyboard input source. Sending
-        // the source at that point avoids a race where the next key is delivered
-        // using the Deck's previous layout.
+        // AppKit documents this notification as arriving *after* text-input
+        // selection changes, so it is our preferred source of truth.
+        cocoaInputSourceObserver = NotificationCenter.default.addObserver(
+            forName: NSTextInputContext.keyboardSelectionDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.inputSourceDidChange()
+        }
+        // Keep the documented TIS distributed notification as a fallback for
+        // input sources that do not produce an AppKit text-input notification.
         inputSourceObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
             object: nil,
@@ -33,6 +47,10 @@ public final class SenderController {
     }
 
     deinit {
+        inputSourceSettlementWorkItem?.cancel()
+        if let cocoaInputSourceObserver {
+            NotificationCenter.default.removeObserver(cocoaInputSourceObserver)
+        }
         if let inputSourceObserver {
             DistributedNotificationCenter.default().removeObserver(inputSourceObserver)
         }
@@ -98,7 +116,7 @@ public final class SenderController {
         runLoopSource = nil
         state.connectionLost()
         layoutSyncEnabled = false
-        layoutSynchronization.reset()
+        resetLayoutSynchronization()
         updateMode()
     }
 
@@ -107,6 +125,8 @@ public final class SenderController {
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                 state.connectionLost()
                 client?.close()
+                layoutSyncEnabled = false
+                resetLayoutSynchronization()
                 // Quartz disables a slow tap. Re-enable it only after returning to
                 // LOCAL, so an event-tap failure can never keep suppressing input.
                 if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
@@ -148,7 +168,7 @@ public final class SenderController {
 
     private func connectionReady(layoutSyncEnabled: Bool) {
         self.layoutSyncEnabled = layoutSyncEnabled
-        layoutSynchronization.reset()
+        resetLayoutSynchronization()
         state.connectionReady()
         sendCurrentLayoutIfNeeded()
         updateMode()
@@ -158,7 +178,7 @@ public final class SenderController {
         let wasConnectingOrRemote = state.mode != .local
         state.connectionLost()
         layoutSyncEnabled = false
-        layoutSynchronization.reset()
+        resetLayoutSynchronization()
         updateMode()
         if wasConnectingOrRemote { connectionFailed?() }
     }
@@ -180,6 +200,13 @@ public final class SenderController {
     }
 
     private func sendCurrentLayoutIfNeeded() {
+        if let generation = layoutSynchronization.pendingSourceChangeGeneration {
+            // A key event can arrive before the scheduled observation. Confirm
+            // the TIS value first so the key cannot cause a stale layout packet
+            // to be sent ahead of the confirmed source.
+            settleInputSourceChange(generation: generation)
+            return
+        }
         guard let packet = layoutSynchronization.nextPacket(
             for: Self.currentKeyboardLayoutIdentifier(),
             enabled: layoutSyncEnabled
@@ -188,9 +215,49 @@ public final class SenderController {
     }
 
     private func inputSourceDidChange() {
-        // Notification delivery uses the main queue above, the same queue that
-        // owns SenderClient and the event-tap state.
-        sendCurrentLayoutIfNeeded()
+        guard layoutSyncEnabled else { return }
+        let generation = layoutSynchronization.beginSourceChange(
+            currentIdentifier: Self.currentKeyboardLayoutIdentifier()
+        )
+        scheduleInputSourceSettlement(generation: generation, after: 0)
+    }
+
+    private func scheduleInputSourceSettlement(generation: UInt, after delay: TimeInterval) {
+        inputSourceSettlementWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.settleInputSourceChange(generation: generation)
+        }
+        inputSourceSettlementWorkItem = workItem
+        // The initial observation is queued immediately. Subsequent delays are
+        // bounded safety limits used only while TIS still reports the source
+        // that was already published; they are not an assumption about when
+        // macOS must finish an input-source transition.
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func settleInputSourceChange(generation: UInt) {
+        inputSourceSettlementWorkItem?.cancel()
+        inputSourceSettlementWorkItem = nil
+        switch layoutSynchronization.observeSourceChange(
+            generation: generation,
+            for: Self.currentKeyboardLayoutIdentifier(),
+            enabled: layoutSyncEnabled
+        ) {
+        case let .send(packet):
+            client?.send(packet)
+        case let .retry(after: delay):
+            scheduleInputSourceSettlement(generation: generation, after: delay)
+        case .timedOut:
+            layoutSynchronizationWarning?()
+        case .none:
+            break
+        }
+    }
+
+    private func resetLayoutSynchronization() {
+        inputSourceSettlementWorkItem?.cancel()
+        inputSourceSettlementWorkItem = nil
+        layoutSynchronization.reset()
     }
 
     /// A stable, non-sensitive identifier used only for Deck layout mapping.
@@ -211,17 +278,89 @@ public final class SenderController {
 
 /// Tracks the last source sent on a session. Keeping this separate from the
 /// event tap makes source-change and reconnect behavior deterministic to test.
+enum LayoutSourceSettlement: Equatable {
+    case send(BridgePacket)
+    case retry(after: TimeInterval)
+    case timedOut
+    case none
+}
+
 struct LayoutSynchronizationState {
+    /// Five retries plus the immediate observation cap a single transition at
+    /// six TIS reads over 385 ms. These are safety limits, not a claim that a
+    /// macOS input-source transition normally needs (or completes within) this
+    /// amount of time.
+    static let sourceObservationBackoff: [TimeInterval] = [0.01, 0.025, 0.05, 0.1, 0.2]
+
     private(set) var lastSentIdentifier: String?
+    private var pendingSourceChange: PendingSourceChange?
+
+    private struct PendingSourceChange {
+        let generation: UInt
+        /// This is the source already represented on the Deck before the
+        /// notification. A new source is valid only after it differs from this
+        /// value, never merely because a notification arrived.
+        let previousIdentifier: String?
+        var retryIndex = 0
+    }
+
+    private var nextGeneration: UInt = 0
+
+    var pendingSourceChangeGeneration: UInt? {
+        pendingSourceChange?.generation
+    }
 
     mutating func reset() {
         lastSentIdentifier = nil
+        pendingSourceChange = nil
+        nextGeneration = 0
     }
 
     mutating func nextPacket(for identifier: String?, enabled: Bool) -> BridgePacket? {
         guard enabled, let identifier, identifier != lastSentIdentifier else { return nil }
         lastSentIdentifier = identifier
+        pendingSourceChange = nil
         return .keyboardLayout(identifier: identifier)
+    }
+
+    /// Starts a new coalescing generation. If no source has been published for
+    /// this session, use the current observation as the conservative baseline:
+    /// until a different source is observed, no layout packet is sent.
+    mutating func beginSourceChange(currentIdentifier: String?) -> UInt {
+        nextGeneration &+= 1
+        pendingSourceChange = PendingSourceChange(
+            generation: nextGeneration,
+            previousIdentifier: lastSentIdentifier ?? currentIdentifier
+        )
+        return nextGeneration
+    }
+
+    mutating func observeSourceChange(
+        generation: UInt,
+        for identifier: String?,
+        enabled: Bool
+    ) -> LayoutSourceSettlement {
+        guard enabled,
+              var pending = pendingSourceChange,
+              pending.generation == generation else {
+            return .none
+        }
+
+        if let identifier, identifier != pending.previousIdentifier {
+            lastSentIdentifier = identifier
+            pendingSourceChange = nil
+            return .send(.keyboardLayout(identifier: identifier))
+        }
+
+        guard pending.retryIndex < Self.sourceObservationBackoff.count else {
+            pendingSourceChange = nil
+            // Failing closed avoids sending the stale, previously selected source.
+            return .timedOut
+        }
+        let delay = Self.sourceObservationBackoff[pending.retryIndex]
+        pending.retryIndex += 1
+        pendingSourceChange = pending
+        return .retry(after: delay)
     }
 }
 
