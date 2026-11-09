@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, Id, RichText};
+use evdev::{AbsoluteAxisCode, Device, EventSummary, KeyCode};
 use get_if_addrs::{get_if_addrs, IfAddr, Interface};
-use gilrs::{Axis, Button, EventType, Gilrs};
 use mac_deck_receiver::PairingSecret;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -173,7 +173,7 @@ struct ReceiverApp<P = ReceiverProcess> {
     gamepad_start_attempted: bool,
 }
 
-/// Reads the Steam Deck controls directly from evdev through gilrs. Steam does
+/// Reads the Steam Deck controls directly from Linux evdev. Steam does
 /// not promise to translate Gaming Mode controller input into keyboard arrows
 /// for a non-Steam desktop window, so relying on eframe keyboard events alone
 /// leaves the UI inaccessible in Gaming Mode.
@@ -188,16 +188,18 @@ struct StickState {
 }
 
 impl StickState {
-    fn key_for_axis(&mut self, axis: Axis, value: f32) -> Option<egui::Key> {
+    fn key_for_axis(&mut self, axis: AbsoluteAxisCode, value: f32) -> Option<egui::Key> {
         const ENGAGE_THRESHOLD: f32 = 0.70;
         const RELEASE_THRESHOLD: f32 = 0.35;
         let (active, negative, positive) = match axis {
-            Axis::LeftStickX => (
+            AbsoluteAxisCode::ABS_X | AbsoluteAxisCode::ABS_HAT0X => (
                 &mut self.x_active,
                 egui::Key::ArrowLeft,
                 egui::Key::ArrowRight,
             ),
-            Axis::LeftStickY => (&mut self.y_active, egui::Key::ArrowUp, egui::Key::ArrowDown),
+            AbsoluteAxisCode::ABS_Y | AbsoluteAxisCode::ABS_HAT0Y => {
+                (&mut self.y_active, egui::Key::ArrowUp, egui::Key::ArrowDown)
+            }
             _ => return None,
         };
         if value.abs() < RELEASE_THRESHOLD {
@@ -216,25 +218,62 @@ impl StickState {
     }
 }
 
-fn gamepad_button_key(button: Button) -> Option<egui::Key> {
+fn gamepad_button_key(button: KeyCode) -> Option<egui::Key> {
     match button {
-        Button::DPadUp => Some(egui::Key::ArrowUp),
-        Button::DPadDown => Some(egui::Key::ArrowDown),
-        Button::DPadLeft => Some(egui::Key::ArrowLeft),
-        Button::DPadRight => Some(egui::Key::ArrowRight),
+        KeyCode::BTN_DPAD_UP => Some(egui::Key::ArrowUp),
+        KeyCode::BTN_DPAD_DOWN => Some(egui::Key::ArrowDown),
+        KeyCode::BTN_DPAD_LEFT => Some(egui::Key::ArrowLeft),
+        KeyCode::BTN_DPAD_RIGHT => Some(egui::Key::ArrowRight),
         // South is the Steam Deck's A button. Enter activates the currently
         // focused egui button, checkbox, or tab.
-        Button::South => Some(egui::Key::Enter),
+        KeyCode::BTN_SOUTH => Some(egui::Key::Enter),
         _ => None,
     }
 }
 
-fn gamepad_event_key(event: EventType, sticks: &mut StickState) -> Option<egui::Key> {
+fn normalized_axis_value(value: i32, range: Option<(i32, i32)>) -> f32 {
+    let Some((minimum, maximum)) = range.filter(|(minimum, maximum)| minimum < maximum) else {
+        return value.signum() as f32;
+    };
+    (((value - minimum) as f32 / (maximum - minimum) as f32) * 2.0 - 1.0).clamp(-1.0, 1.0)
+}
+
+fn controller_axis_range(device: &Device, wanted: AbsoluteAxisCode) -> Option<(i32, i32)> {
+    device
+        .get_absinfo()
+        .ok()?
+        .find(|(axis, _)| *axis == wanted)
+        .map(|(_, info)| (info.minimum(), info.maximum()))
+}
+
+fn is_controller(device: &Device) -> bool {
+    let Some(keys) = device.supported_keys() else {
+        return false;
+    };
+    keys.contains(KeyCode::BTN_SOUTH)
+        && (keys.contains(KeyCode::BTN_DPAD_UP)
+            || device
+                .supported_absolute_axes()
+                .is_some_and(|axes| axes.contains(AbsoluteAxisCode::ABS_X)))
+}
+
+fn controller_event_key(
+    event: EventSummary,
+    sticks: &mut StickState,
+    x_range: Option<(i32, i32)>,
+    y_range: Option<(i32, i32)>,
+) -> Option<egui::Key> {
     match event {
-        EventType::ButtonPressed(button, _) | EventType::ButtonRepeated(button, _) => {
-            gamepad_button_key(button)
+        EventSummary::Key(_, button, 1) => gamepad_button_key(button),
+        EventSummary::AbsoluteAxis(_, axis, value) => {
+            let range = match axis {
+                AbsoluteAxisCode::ABS_X => x_range,
+                AbsoluteAxisCode::ABS_Y => y_range,
+                AbsoluteAxisCode::ABS_HAT0X | AbsoluteAxisCode::ABS_HAT0Y => Some((-1, 1)),
+                _ => None,
+            };
+            sticks.key_for_axis(axis, normalized_axis_value(value, range))
         }
-        EventType::AxisChanged(axis, value, _) => sticks.key_for_axis(axis, value),
         _ => None,
     }
 }
@@ -248,19 +287,28 @@ impl GamepadNavigation {
                 // Missing device permissions must degrade safely to normal
                 // keyboard/mouse use; the receiver never needs root solely
                 // for controller navigation.
-                let Ok(mut gilrs) = Gilrs::new() else {
+                let Some(mut device) = evdev::enumerate()
+                    .find_map(|(_, device)| is_controller(&device).then_some(device))
+                else {
                     return;
                 };
+                let x_range = controller_axis_range(&device, AbsoluteAxisCode::ABS_X);
+                let y_range = controller_axis_range(&device, AbsoluteAxisCode::ABS_Y);
                 let mut sticks = StickState::default();
-                while let Some(event) = gilrs.next_event_blocking(None) {
-                    if let Some(key) = gamepad_event_key(event.event, &mut sticks) {
-                        if sender.send(key).is_err() {
-                            break;
+                while let Ok(events) = device.fetch_events() {
+                    for event in events {
+                        if let Some(key) =
+                            controller_event_key(event.destructure(), &mut sticks, x_range, y_range)
+                        {
+                            if sender.send(key).is_err() {
+                                return;
+                            }
+                            // evdev is not part of eframe's event loop. Wake
+                            // the UI only for a real controller action,
+                            // avoiding a polling repaint loop and its battery
+                            // cost.
+                            context.request_repaint();
                         }
-                        // gilrs is not part of eframe's event loop. Wake the
-                        // UI only for a real controller action, avoiding a
-                        // polling repaint loop and its battery cost.
-                        context.request_repaint();
                     }
                 }
             })
@@ -1104,34 +1152,40 @@ mod tests {
 
     #[test]
     fn deck_gamepad_controls_map_to_navigation_and_activation_keys() {
-        assert_eq!(gamepad_button_key(Button::DPadUp), Some(egui::Key::ArrowUp));
         assert_eq!(
-            gamepad_button_key(Button::DPadDown),
+            gamepad_button_key(KeyCode::BTN_DPAD_UP),
+            Some(egui::Key::ArrowUp)
+        );
+        assert_eq!(
+            gamepad_button_key(KeyCode::BTN_DPAD_DOWN),
             Some(egui::Key::ArrowDown)
         );
         assert_eq!(
-            gamepad_button_key(Button::DPadLeft),
+            gamepad_button_key(KeyCode::BTN_DPAD_LEFT),
             Some(egui::Key::ArrowLeft)
         );
         assert_eq!(
-            gamepad_button_key(Button::DPadRight),
+            gamepad_button_key(KeyCode::BTN_DPAD_RIGHT),
             Some(egui::Key::ArrowRight)
         );
-        assert_eq!(gamepad_button_key(Button::South), Some(egui::Key::Enter));
-        assert_eq!(gamepad_button_key(Button::North), None);
+        assert_eq!(
+            gamepad_button_key(KeyCode::BTN_SOUTH),
+            Some(egui::Key::Enter)
+        );
+        assert_eq!(gamepad_button_key(KeyCode::BTN_NORTH), None);
     }
 
     #[test]
     fn left_stick_emits_one_direction_until_released() {
         let mut sticks = StickState::default();
         assert_eq!(
-            sticks.key_for_axis(Axis::LeftStickY, -0.8),
+            sticks.key_for_axis(AbsoluteAxisCode::ABS_Y, -0.8),
             Some(egui::Key::ArrowUp)
         );
-        assert_eq!(sticks.key_for_axis(Axis::LeftStickY, -0.9), None);
-        assert_eq!(sticks.key_for_axis(Axis::LeftStickY, 0.0), None);
+        assert_eq!(sticks.key_for_axis(AbsoluteAxisCode::ABS_Y, -0.9), None);
+        assert_eq!(sticks.key_for_axis(AbsoluteAxisCode::ABS_Y, 0.0), None);
         assert_eq!(
-            sticks.key_for_axis(Axis::LeftStickY, 0.8),
+            sticks.key_for_axis(AbsoluteAxisCode::ABS_Y, 0.8),
             Some(egui::Key::ArrowDown)
         );
     }
