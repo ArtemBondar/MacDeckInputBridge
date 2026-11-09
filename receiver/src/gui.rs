@@ -1,5 +1,6 @@
 use eframe::egui::{self, Color32, Id, RichText};
 use get_if_addrs::{get_if_addrs, IfAddr, Interface};
+use gilrs::{Axis, Button, EventType, Gilrs};
 use mac_deck_receiver::PairingSecret;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -10,7 +11,9 @@ use std::{
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::mpsc::{self, Receiver},
     sync::Arc,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -166,6 +169,108 @@ struct ReceiverApp<P = ReceiverProcess> {
     selected_tab: Tab,
     ip_addresses: Vec<Ipv4Addr>,
     status: Option<String>,
+    gamepad: Option<GamepadNavigation>,
+    gamepad_start_attempted: bool,
+}
+
+/// Reads the Steam Deck controls directly from evdev through gilrs. Steam does
+/// not promise to translate Gaming Mode controller input into keyboard arrows
+/// for a non-Steam desktop window, so relying on eframe keyboard events alone
+/// leaves the UI inaccessible in Gaming Mode.
+struct GamepadNavigation {
+    keys: Receiver<egui::Key>,
+}
+
+#[derive(Default)]
+struct StickState {
+    x_active: bool,
+    y_active: bool,
+}
+
+impl StickState {
+    fn key_for_axis(&mut self, axis: Axis, value: f32) -> Option<egui::Key> {
+        const ENGAGE_THRESHOLD: f32 = 0.70;
+        const RELEASE_THRESHOLD: f32 = 0.35;
+        let (active, negative, positive) = match axis {
+            Axis::LeftStickX => (
+                &mut self.x_active,
+                egui::Key::ArrowLeft,
+                egui::Key::ArrowRight,
+            ),
+            Axis::LeftStickY => (&mut self.y_active, egui::Key::ArrowUp, egui::Key::ArrowDown),
+            _ => return None,
+        };
+        if value.abs() < RELEASE_THRESHOLD {
+            *active = false;
+            return None;
+        }
+        if *active || value.abs() < ENGAGE_THRESHOLD {
+            return None;
+        }
+        *active = true;
+        Some(if value.is_sign_negative() {
+            negative
+        } else {
+            positive
+        })
+    }
+}
+
+fn gamepad_button_key(button: Button) -> Option<egui::Key> {
+    match button {
+        Button::DPadUp => Some(egui::Key::ArrowUp),
+        Button::DPadDown => Some(egui::Key::ArrowDown),
+        Button::DPadLeft => Some(egui::Key::ArrowLeft),
+        Button::DPadRight => Some(egui::Key::ArrowRight),
+        // South is the Steam Deck's A button. Enter activates the currently
+        // focused egui button, checkbox, or tab.
+        Button::South => Some(egui::Key::Enter),
+        _ => None,
+    }
+}
+
+fn gamepad_event_key(event: EventType, sticks: &mut StickState) -> Option<egui::Key> {
+    match event {
+        EventType::ButtonPressed(button, _) | EventType::ButtonRepeated(button, _) => {
+            gamepad_button_key(button)
+        }
+        EventType::AxisChanged(axis, value, _) => sticks.key_for_axis(axis, value),
+        _ => None,
+    }
+}
+
+impl GamepadNavigation {
+    fn start(context: egui::Context) -> Option<Self> {
+        let (sender, keys) = mpsc::channel();
+        thread::Builder::new()
+            .name("macdeck-gamepad".to_owned())
+            .spawn(move || {
+                // Missing device permissions must degrade safely to normal
+                // keyboard/mouse use; the receiver never needs root solely
+                // for controller navigation.
+                let Ok(mut gilrs) = Gilrs::new() else {
+                    return;
+                };
+                let mut sticks = StickState::default();
+                while let Some(event) = gilrs.next_event_blocking(None) {
+                    if let Some(key) = gamepad_event_key(event.event, &mut sticks) {
+                        if sender.send(key).is_err() {
+                            break;
+                        }
+                        // gilrs is not part of eframe's event loop. Wake the
+                        // UI only for a real controller action, avoiding a
+                        // polling repaint loop and its battery cost.
+                        context.request_repaint();
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self { keys })
+    }
+
+    fn drain_keys(&self) -> Vec<egui::Key> {
+        self.keys.try_iter().collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -267,6 +372,8 @@ impl ReceiverApp<ReceiverProcess> {
             selected_tab: Tab::Control,
             ip_addresses: local_ipv4_addresses(),
             status,
+            gamepad: None,
+            gamepad_start_attempted: false,
         }
     }
 }
@@ -281,6 +388,8 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             selected_tab: Tab::Control,
             ip_addresses: Vec::new(),
             status: None,
+            gamepad: None,
+            gamepad_start_attempted: true,
         }
     }
 
@@ -572,8 +681,38 @@ fn controller_navigation_enabled() -> bool {
     )
 }
 
+fn inject_gamepad_key_presses(context: &egui::Context, keys: impl IntoIterator<Item = egui::Key>) {
+    context.input_mut(|input| {
+        for key in keys {
+            // A press event is enough for egui's focus/navigation handling.
+            // Add the matching release immediately so a controller action
+            // cannot leave a synthetic key held down in the text editor.
+            for pressed in [true, false] {
+                input.events.push(egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
+    });
+}
+
 impl eframe::App for ReceiverApp<ReceiverProcess> {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.gamepad_start_attempted {
+            self.gamepad_start_attempted = true;
+            self.gamepad = GamepadNavigation::start(context.clone());
+        }
+        let gamepad_keys = self
+            .gamepad
+            .as_ref()
+            .map(GamepadNavigation::drain_keys)
+            .unwrap_or_default();
+        let received_gamepad_navigation = !gamepad_keys.is_empty();
+        inject_gamepad_key_presses(context, gamepad_keys);
         let mut focus_widgets = Vec::new();
         egui::TopBottomPanel::top("tabs").show(context, |ui| {
             ui.horizontal(|ui| {
@@ -614,7 +753,7 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
             &focus_widgets,
             self.selected_tab,
             self.settings.sync_layout_from_mac,
-            controller_navigation_enabled(),
+            received_gamepad_navigation || controller_navigation_enabled(),
         );
         // There is no animation. When disabled, egui can sleep until a real
         // input event arrives. Poll a running child only once per second so a
@@ -964,6 +1103,40 @@ mod tests {
     }
 
     #[test]
+    fn deck_gamepad_controls_map_to_navigation_and_activation_keys() {
+        assert_eq!(gamepad_button_key(Button::DPadUp), Some(egui::Key::ArrowUp));
+        assert_eq!(
+            gamepad_button_key(Button::DPadDown),
+            Some(egui::Key::ArrowDown)
+        );
+        assert_eq!(
+            gamepad_button_key(Button::DPadLeft),
+            Some(egui::Key::ArrowLeft)
+        );
+        assert_eq!(
+            gamepad_button_key(Button::DPadRight),
+            Some(egui::Key::ArrowRight)
+        );
+        assert_eq!(gamepad_button_key(Button::South), Some(egui::Key::Enter));
+        assert_eq!(gamepad_button_key(Button::North), None);
+    }
+
+    #[test]
+    fn left_stick_emits_one_direction_until_released() {
+        let mut sticks = StickState::default();
+        assert_eq!(
+            sticks.key_for_axis(Axis::LeftStickY, -0.8),
+            Some(egui::Key::ArrowUp)
+        );
+        assert_eq!(sticks.key_for_axis(Axis::LeftStickY, -0.9), None);
+        assert_eq!(sticks.key_for_axis(Axis::LeftStickY, 0.0), None);
+        assert_eq!(
+            sticks.key_for_axis(Axis::LeftStickY, 0.8),
+            Some(egui::Key::ArrowDown)
+        );
+    }
+
+    #[test]
     fn gamepad_focus_wraps_predictably_between_controls() {
         assert_eq!(
             next_focus_target(
@@ -1105,6 +1278,8 @@ mod tests {
             selected_tab: Tab::Settings,
             ip_addresses: Vec::new(),
             status: None,
+            gamepad: None,
+            gamepad_start_attempted: true,
         };
         app.settings.bind = "127.0.0.1:4343".to_owned();
         app.apply_settings().unwrap();
