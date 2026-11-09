@@ -18,7 +18,7 @@ jobs:
         working-directory: receiver
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libudev-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxkbcommon-dev libxrandr-dev
+      - run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxkbcommon-dev libxrandr-dev
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets --features desktop-ui -- -D warnings
       - run: cargo test --locked --features desktop-ui
