@@ -202,6 +202,25 @@ final class SettingsWindowControllerTests: XCTestCase {
         window.close()
     }
 
+    func testSelectingLocalSecretFallbackReplacesKeychainErrorWithGuidance() throws {
+        let controller = SettingsWindowController()
+        controller.show(
+            draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: ""),
+            notice: "Keychain access is unavailable. Enter the pairing secret again."
+        ) { _ in nil }
+        let window = try XCTUnwrap(controller.window)
+        drainMainQueue()
+
+        controller.allowLocalSecretFallbackCheckbox.performClick(nil)
+
+        XCTAssertEqual(
+            controller.messageLabel.stringValue,
+            "After you click Save, the pairing secret will be stored in this Mac’s private local file."
+        )
+        XCTAssertEqual(controller.messageLabel.textColor, .secondaryLabelColor)
+        window.close()
+    }
+
     func testDockVisibilityPreferenceDefaultsToShownAndPersistsChoice() {
         let suite = "MacDeckMenuBarUITests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
