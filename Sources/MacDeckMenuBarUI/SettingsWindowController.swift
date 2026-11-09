@@ -127,9 +127,13 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     @objc private func localSecretFallbackSelectionChanged(_ sender: Any?) {
         guard allowLocalSecretFallbackCheckbox.state == .on,
-              messageLabel.stringValue.contains("Keychain") else { return }
+              isKeychainRelatedNotice(messageLabel.stringValue) else { return }
         messageLabel.stringValue = "After you click Save, the pairing secret will be stored in this Mac’s private local file."
         messageLabel.textColor = .secondaryLabelColor
+    }
+
+    private func isKeychainRelatedNotice(_ notice: String) -> Bool {
+        notice.contains("Keychain") || notice.hasPrefix("Could not load the pairing secret")
     }
 
     private func isInformationalNotice(_ notice: String?) -> Bool {

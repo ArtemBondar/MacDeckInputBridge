@@ -206,7 +206,7 @@ final class SettingsWindowControllerTests: XCTestCase {
         let controller = SettingsWindowController()
         controller.show(
             draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: ""),
-            notice: "Keychain access is unavailable. Enter the pairing secret again."
+            notice: "Could not load the pairing secret. Enter it again in Settings."
         ) { _ in nil }
         let window = try XCTUnwrap(controller.window)
         drainMainQueue()
