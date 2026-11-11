@@ -60,3 +60,7 @@ input, or UI.
 7. **Release only reviewable evidence.** Use a feature branch and PR; run the
    full locked Swift/Rust/test-installer suite. Record what CI proves and what
    still requires physical verification in the PR and release notes.
+8. **Name branches by change type.** Use `feature/<issue>-<short-name>` for
+   new user-facing capability, `bugfix/<issue>-<short-name>` for a correction,
+   and `chore/<issue>-<short-name>` for tooling, documentation, or refactoring.
+   Do not commit directly to `main`.
