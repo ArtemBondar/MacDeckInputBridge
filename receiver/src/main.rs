@@ -66,10 +66,30 @@ trait ClipboardSink {
     fn set_text(&mut self, text: &str) -> Result<(), String>;
 }
 
+fn gaming_session(
+    current: Option<&str>,
+    session: Option<&str>,
+    app: Option<&str>,
+    game: Option<&str>,
+) -> bool {
+    current.is_some_and(|value| value.to_ascii_lowercase().contains("gamescope"))
+        || session.is_some_and(|value| value.to_ascii_lowercase().contains("gamescope"))
+        || app.is_some_and(|value| !value.trim().is_empty())
+        || game.is_some_and(|value| !value.trim().is_empty())
+}
+
 struct WaylandClipboardSink;
 
 impl WaylandClipboardSink {
     fn new() -> Result<Self, String> {
+        if gaming_session(
+            env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+            env::var("XDG_SESSION_DESKTOP").ok().as_deref(),
+            env::var("SteamAppId").ok().as_deref(),
+            env::var("SteamGameId").ok().as_deref(),
+        ) {
+            return Err("clipboard sync requires Steam Deck Desktop Mode".to_owned());
+        }
         let runtime = env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
             "no active Wayland runtime; open MacDeck in Steam Deck Desktop Mode".to_owned()
         })?;
@@ -92,7 +112,17 @@ impl ClipboardSink for WaylandClipboardSink {
                 ClipboardSource::Bytes(text.as_bytes().to_vec().into()),
                 MimeType::Text,
             )
-            .map_err(|_| "could not write text to the Wayland clipboard".to_owned())
+            .map_err(|error| match error {
+                wl_clipboard_rs::copy::Error::SocketOpenError(_)
+                | wl_clipboard_rs::copy::Error::WaylandConnection(_) => {
+                    "Cannot connect to Wayland; open MacDeck in Desktop Mode".to_owned()
+                }
+                wl_clipboard_rs::copy::Error::MissingProtocol { .. } => {
+                    "The Wayland compositor lacks a required clipboard protocol".to_owned()
+                }
+                _ => "Could not write to the Wayland clipboard; check the Desktop Mode session"
+                    .to_owned(),
+            })
     }
 }
 
@@ -1174,6 +1204,15 @@ mod receiver_tests {
             self.held.clear();
             Ok(())
         }
+    }
+
+    #[test]
+    fn clipboard_capability_rejects_gaming_sessions() {
+        assert!(gaming_session(Some("gamescope"), None, None, None));
+        assert!(gaming_session(None, Some("Gamescope"), None, None));
+        assert!(gaming_session(None, None, Some("123"), None));
+        assert!(gaming_session(None, None, None, Some("123")));
+        assert!(!gaming_session(Some("KDE"), None, None, None));
     }
 
     #[test]

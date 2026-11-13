@@ -7,7 +7,7 @@ use std::{
     collections::BTreeSet,
     env,
     fs::{self, OpenOptions},
-    io,
+    io::{self, BufRead},
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -69,8 +69,21 @@ impl ReceiverSettings {
     }
 }
 
+fn clipboard_diagnostic(line: &str) -> Option<&str> {
+    let message = line.strip_prefix("Could not update the Steam Deck clipboard: ")?;
+    match message {
+        "Cannot connect to Wayland; open MacDeck in Desktop Mode"
+        | "The Wayland compositor lacks a required clipboard protocol"
+        | "Could not write to the Wayland clipboard; check the Desktop Mode session" => {
+            Some(message)
+        }
+        _ => None,
+    }
+}
+
 struct ReceiverProcess {
     child: Option<Child>,
+    diagnostics: Option<Receiver<String>>,
 }
 
 trait ReceiverSupervisor {
@@ -98,18 +111,29 @@ impl ReceiverSupervisor for ReceiverProcess {
             return Ok(());
         }
         let executable = receiver_executable()?;
-        let child = Command::new(executable)
+        let mut child = Command::new(executable)
             .arg("serve")
             .arg("--bind")
             .arg(&settings.bind)
             .env("MAC_DECK_PAIRING_SECRET", &settings.pairing_secret)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .args(layout_sync_arguments(settings)?)
             .args(clipboard_sync_arguments(settings))
             .spawn()
             .map_err(|error| format!("Could not start receiver: {error}"))?;
+        let (sender, receiver) = mpsc::channel();
+        if let Some(stderr) = child.stderr.take() {
+            thread::spawn(move || {
+                for line in io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                    if let Some(message) = clipboard_diagnostic(&line) {
+                        let _ = sender.send(message.to_owned());
+                    }
+                }
+            });
+        }
+        self.diagnostics = Some(receiver);
         self.child = Some(child);
         Ok(())
     }
@@ -424,7 +448,10 @@ impl ReceiverApp<ReceiverProcess> {
         Self {
             settings,
             settings_path,
-            process: ReceiverProcess { child: None },
+            process: ReceiverProcess {
+                child: None,
+                diagnostics: None,
+            },
             selected_tab: Tab::Control,
             ip_addresses: local_ipv4_addresses(),
             status,
@@ -774,6 +801,15 @@ fn inject_gamepad_key_presses(context: &egui::Context, keys: impl IntoIterator<I
 
 impl eframe::App for ReceiverApp<ReceiverProcess> {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(message) = self
+            .process
+            .diagnostics
+            .as_ref()
+            .and_then(|rx| rx.try_iter().last())
+        {
+            self.status = Some(message);
+        }
+        context.request_repaint_after(Duration::from_secs(1));
         if !self.gamepad_start_attempted {
             self.gamepad_start_attempted = true;
             self.gamepad = GamepadNavigation::start(context.clone());
@@ -1162,6 +1198,16 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_diagnostics_only_accept_known_safe_messages() {
+        assert_eq!(clipboard_diagnostic("Could not update the Steam Deck clipboard: Cannot connect to Wayland; open MacDeck in Desktop Mode"), Some("Cannot connect to Wayland; open MacDeck in Desktop Mode"));
+        assert_eq!(
+            clipboard_diagnostic("Could not update the Steam Deck clipboard: secret"),
+            None
+        );
+        assert_eq!(clipboard_diagnostic("unrelated error"), None);
+    }
+
+    #[test]
     fn clipboard_sync_is_off_by_default_and_only_adds_an_explicit_receiver_flag() {
         let disabled = ReceiverSettings::default();
         assert!(clipboard_sync_arguments(&disabled).is_empty());
@@ -1442,7 +1488,10 @@ mod tests {
         let mut app = ReceiverApp {
             settings: ReceiverSettings::default(),
             settings_path: path.clone(),
-            process: ReceiverProcess { child: None },
+            process: ReceiverProcess {
+                child: None,
+                diagnostics: None,
+            },
             selected_tab: Tab::Settings,
             ip_addresses: Vec::new(),
             status: None,
