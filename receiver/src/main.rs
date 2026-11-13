@@ -1482,6 +1482,41 @@ mod receiver_tests {
     }
 
     #[test]
+    fn session_frame_deadline_is_not_extended_by_trickled_bytes() {
+        use std::sync::mpsc;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let shutdown = AtomicBool::new(false);
+            let mut reader = SessionFrameReader {
+                stream: &mut stream,
+                shutdown: &shutdown,
+                deadline: None,
+                timeout: Duration::from_millis(200),
+                bytes_read: 0,
+            };
+            let result = reader.read_exact(&mut [0; 4096]);
+            done_tx.send(result.unwrap_err().kind()).unwrap();
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            while stop_rx.recv_timeout(Duration::from_millis(20)).is_err() {
+                if client.write_all(&[0]).is_err() {
+                    break;
+                }
+            }
+        });
+        let completed = done_rx.recv_timeout(Duration::from_secs(2));
+        let _ = stop_tx.send(());
+        writer.join().unwrap();
+        server.join().unwrap();
+        assert_eq!(completed.unwrap(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
     fn partial_frame_failure_releases_an_held_key() {
         let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
