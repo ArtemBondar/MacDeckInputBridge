@@ -539,6 +539,20 @@ final class BridgeCoreTests: XCTestCase {
             text: String(repeating: "x", count: BridgePacket.maximumClipboardTextBytes + 1)
         ))
         XCTAssertNil(BridgePacket(encoded: Data([10, ClipboardOrigin.steamDeck.rawValue] + Array(repeating: 0, count: 7))))
+        XCTAssertNil(BridgePacket(encoded: Data([13, ClipboardOrigin.mac.rawValue] + Array(repeating: 0, count: 8) + [99])))
+    }
+
+    func testClipboardDeliveryAcknowledgementKeepsContentOutOfTheProtocol() {
+        let packet = BridgePacket.clipboardDelivery(
+            origin: .mac,
+            transferID: 42,
+            delivery: .written
+        )
+        XCTAssertEqual(
+            packet.encoded(),
+            Data([13, ClipboardOrigin.mac.rawValue] + Array(repeating: 0, count: 7) + [42, ClipboardDelivery.written.rawValue])
+        )
+        XCTAssertEqual(BridgePacket(encoded: packet.encoded()), packet)
     }
 
     func testClipboardSynchronizationDoesNotSendExistingDataOrAfterCancellation() {

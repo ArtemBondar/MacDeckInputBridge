@@ -77,6 +77,16 @@ private final class MenuBarModel: ObservableObject {
         sender.clipboardSynchronizationUnavailable = { [weak self] in
             self?.message = "Clipboard sync is unavailable. Enable it in MacDeck Settings while the Steam Deck is in Desktop Mode."
         }
+        sender.clipboardDeliveryResult = { [weak self] result in
+            self?.message = switch result {
+            case .written:
+                "Clipboard received by Steam Deck."
+            case .unavailable:
+                "Steam Deck clipboard sync is unavailable. Open MacDeck in Desktop Mode and reconnect."
+            case .failed:
+                "Steam Deck could not update its clipboard. Open MacDeck in Desktop Mode and reconnect."
+            }
+        }
     }
 
     func toggle() {

@@ -70,6 +70,9 @@ impl ReceiverSettings {
 }
 
 fn clipboard_diagnostic(line: &str) -> Option<&str> {
+    if line == "Steam Deck clipboard updated from Mac." {
+        return Some("Clipboard received from Mac.");
+    }
     let message = line.strip_prefix("Could not update the Steam Deck clipboard: ")?;
     match message {
         "Cannot connect to Wayland; open MacDeck in Desktop Mode"
@@ -1199,6 +1202,10 @@ mod tests {
 
     #[test]
     fn clipboard_diagnostics_only_accept_known_safe_messages() {
+        assert_eq!(
+            clipboard_diagnostic("Steam Deck clipboard updated from Mac."),
+            Some("Clipboard received from Mac.")
+        );
         assert_eq!(clipboard_diagnostic("Could not update the Steam Deck clipboard: Cannot connect to Wayland; open MacDeck in Desktop Mode"), Some("Cannot connect to Wayland; open MacDeck in Desktop Mode"));
         assert_eq!(
             clipboard_diagnostic("Could not update the Steam Deck clipboard: secret"),
