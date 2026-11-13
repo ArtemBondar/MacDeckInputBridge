@@ -66,16 +66,9 @@ trait ClipboardSink {
     fn set_text(&mut self, text: &str) -> Result<(), String>;
 }
 
-fn gaming_session(
-    current: Option<&str>,
-    session: Option<&str>,
-    app: Option<&str>,
-    game: Option<&str>,
-) -> bool {
+fn gaming_session(current: Option<&str>, session: Option<&str>) -> bool {
     current.is_some_and(|value| value.to_ascii_lowercase().contains("gamescope"))
         || session.is_some_and(|value| value.to_ascii_lowercase().contains("gamescope"))
-        || app.is_some_and(|value| !value.trim().is_empty())
-        || game.is_some_and(|value| !value.trim().is_empty())
 }
 
 struct WaylandClipboardSink;
@@ -85,8 +78,6 @@ impl WaylandClipboardSink {
         if gaming_session(
             env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
             env::var("XDG_SESSION_DESKTOP").ok().as_deref(),
-            env::var("SteamAppId").ok().as_deref(),
-            env::var("SteamGameId").ok().as_deref(),
         ) {
             return Err("clipboard sync requires Steam Deck Desktop Mode".to_owned());
         }
@@ -1208,11 +1199,11 @@ mod receiver_tests {
 
     #[test]
     fn clipboard_capability_rejects_gaming_sessions() {
-        assert!(gaming_session(Some("gamescope"), None, None, None));
-        assert!(gaming_session(None, Some("Gamescope"), None, None));
-        assert!(gaming_session(None, None, Some("123"), None));
-        assert!(gaming_session(None, None, None, Some("123")));
-        assert!(!gaming_session(Some("KDE"), None, None, None));
+        assert!(gaming_session(Some("gamescope"), None));
+        assert!(gaming_session(None, Some("Gamescope")));
+        // Steam shortcut IDs describe the application, not the desktop session.
+        assert!(!gaming_session(Some("KDE"), Some("plasma")));
+        assert!(!gaming_session(None, None));
     }
 
     #[test]
