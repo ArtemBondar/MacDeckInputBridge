@@ -5,8 +5,11 @@ use mac_deck_receiver::{
 };
 use std::{
     collections::{BTreeMap, HashMap},
-    env, io,
+    env,
+    ffi::CString,
+    io,
     net::{Shutdown, TcpListener, TcpStream},
+    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Output, Stdio},
     sync::{
@@ -490,13 +493,24 @@ fn find_qdbus() -> Result<PathBuf, String> {
         PathBuf::from("/usr/lib/qt6/bin/qdbus6"),
         PathBuf::from("/usr/lib/qt6/bin/qdbus"),
     ]);
-    candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            "qdbus was not found. Install or expose qdbus6/qdbus-qt6 in this Plasma session"
-                .to_owned()
-        })
+    select_qdbus(candidates).ok_or_else(|| {
+        "No executable qdbus found. Install qdbus6/qdbus-qt6 or set MAC_DECK_QDBUS to an executable path"
+            .to_owned()
+    })
+}
+
+fn select_qdbus(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|path| {
+        if !path.is_file() {
+            return false;
+        }
+        let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // Match the effective credentials used by the receiver; a non-executable
+        // file earlier in PATH must not hide a usable qdbus later in the search.
+        unsafe { libc::faccessat(libc::AT_FDCWD, path.as_ptr(), libc::X_OK, libc::AT_EACCESS) == 0 }
+    })
 }
 
 fn qdbus_call(qdbus: &Path, arguments: &[&str]) -> io::Result<Output> {
@@ -1389,6 +1403,35 @@ mod receiver_tests {
             automatic_layout_index("com.apple.keylayout.Ukrainian", &layouts),
             Some(1)
         );
+    }
+
+    #[test]
+    fn qdbus_discovery_skips_non_executable_files_and_reports_no_candidate() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "macdeck-qdbus-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let blocked = directory.join("qdbus6");
+        let usable = directory.join("qdbus");
+        std::fs::write(&blocked, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(&usable, b"#!/bin/sh\nprintf 'true\\n'\n").unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&usable, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let selected = select_qdbus([blocked.clone(), usable.clone()]).unwrap();
+        assert_eq!(selected, usable);
+        let output = qdbus_call(&selected, &[]).unwrap();
+        assert!(output.status.success());
+        assert!(qdbus_boolean_reply_accepted(&output.stdout));
+        assert_eq!(select_qdbus([directory.clone(), blocked]), None);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
