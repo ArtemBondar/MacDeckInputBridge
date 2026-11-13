@@ -64,3 +64,16 @@ input, or UI.
    new user-facing capability, `bugfix/<issue>-<short-name>` for a correction,
    and `chore/<issue>-<short-name>` for tooling, documentation, or refactoring.
    Do not commit directly to `main`.
+
+## Code review quality standards
+
+Review all Swift, Rust, scripts, and workflow changes for human readability and long-term maintainability, in addition to correctness and security.
+
+- **Magic numbers and strings:** Flag unexplained literals that encode timeouts, retries, buffer sizes, ports, limits, key codes, protocol values, or other policy. Prefer named constants or typed configuration with meaningful units. Do not demand constants for obvious, local values such as zero-based indices when naming adds no clarity.
+- **Delays and timing:** Scrutinize every new sleep, timer, polling interval, debounce, timeout, and retry backoff. Ask what event or state it is waiting for, whether a deterministic signal could replace the delay, how cancellation works, and what happens on timeout or disconnect. Avoid arbitrary sleeps used to hide races or flaky tests. Timeouts that are genuinely necessary should be named, bounded, justified, and tested.
+- **Simplicity:** Prefer the smallest understandable solution. Flag unnecessary abstraction, speculative extensibility, redundant layers, over-engineered state machines, duplicate logic, and dependencies that do not earn their complexity.
+- **Readability:** Prefer descriptive names, short cohesive functions, explicit control flow, and comments explaining *why* rather than narrating *what*. Avoid clever one-liners, deeply nested branches, and implicit side effects when a straightforward alternative exists.
+- **Maintainability:** Look for unclear ownership and lifecycle, hidden coupling, scattered configuration, fragile platform assumptions, and changes that make future debugging harder. Keep behavior testable and errors actionable.
+- **Review signal:** Report actionable findings with file/line references, severity, rationale, and a concrete simpler alternative. Distinguish correctness risks from optional style preferences; avoid nitpicks and broad refactors unrelated to the PR.
+
+For keyboard forwarding, timing and state transitions are safety-critical: verify that failure, cancellation, disconnect, and reconnect cannot leave local input suppressed or remote keys held down.
