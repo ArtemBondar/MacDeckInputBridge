@@ -20,6 +20,7 @@ public final class SenderController {
     /// transfer has completed. It never exposes the copied text.
     public var clipboardDeliveryResult: ((ClipboardDelivery) -> Void)?
     public var deckClipboardUnavailable: (() -> Void)?
+    public var deckClipboardAvailable: (() -> Void)?
     public var deckClipboardReceived: ((Bool) -> Void)?
 
     private var state = InputStateMachine()
@@ -104,7 +105,10 @@ public final class SenderController {
             }
         }
         client?.onDeckClipboardCapability = { [weak self] available in
-            if !available { DispatchQueue.main.async { self?.deckClipboardUnavailable?() } }
+            DispatchQueue.main.async {
+                if available { self?.deckClipboardAvailable?() }
+                else { self?.deckClipboardUnavailable?() }
+            }
         }
     }
 
@@ -567,6 +571,25 @@ public struct ConnectionRetryPolicy: Equatable, Sendable {
     }
 }
 
+// A timeout reports unavailable but does not invalidate a late response or a
+// subsequent availability update from the same authenticated session.
+struct ClipboardCapabilityState {
+    private var requested = false
+    private var pending = false
+
+    mutating func request() { requested = true; pending = true }
+    mutating func timeout() -> Bool {
+        guard pending else { return false }
+        pending = false
+        return true
+    }
+    mutating func receive() -> Bool {
+        guard requested else { return false }
+        pending = false
+        return true
+    }
+}
+
 private final class SenderClient {
     private static let maximumReceiveLength = SessionFramer.maximumFrameSize + 4
 
@@ -597,7 +620,7 @@ private final class SenderClient {
     var onDeckClipboardCapability: ((Bool) -> Void)?
     private var incomingClipboard: IncomingClipboardTransfer?
     private var deckClipboardAllowed = false
-    private var clipboardCapabilityPending = false
+    private var clipboardCapability = ClipboardCapabilityState()
 
     init(pairingSecret: String, retryPolicy: ConnectionRetryPolicy = .deckReceiverStartup) throws {
         pairing = try PairingSecret(base64: pairingSecret)
@@ -615,11 +638,10 @@ private final class SenderClient {
     func requestDeckClipboardCapability() {
         queue.async { [weak self] in
             guard let self, self.isReady, let generation = self.activeGeneration else { return }
-            self.clipboardCapabilityPending = true
+            self.clipboardCapability.request()
             self.sendApplicationPacket(.ping)
             self.queue.asyncAfter(deadline: .now() + 3) { [weak self] in
-                guard let self, self.activeGeneration == generation, self.clipboardCapabilityPending else { return }
-                self.clipboardCapabilityPending = false
+                guard let self, self.activeGeneration == generation, self.clipboardCapability.timeout() else { return }
                 self.onDeckClipboardCapability?(false)
             }
         }
@@ -651,7 +673,7 @@ private final class SenderClient {
         isReady = false
         incomingClipboard = nil
         deckClipboardAllowed = false
-        clipboardCapabilityPending = false
+        clipboardCapability = ClipboardCapabilityState()
 
         let connection = NWConnection(
             host: NWEndpoint.Host(endpoint.host),
@@ -727,9 +749,9 @@ private final class SenderClient {
             case let .clipboardDelivery(origin, _, delivery) where origin == .mac:
                 onClipboardDelivery?(delivery)
             case let .clipboardCapabilities(deckToMac):
-                guard clipboardCapabilityPending else { throw ProtocolError.invalidFrame }
-                clipboardCapabilityPending = false
+                guard clipboardCapability.receive() else { throw ProtocolError.invalidFrame }
                 deckClipboardAllowed = deckToMac
+                if !deckToMac { incomingClipboard = nil }
                 onDeckClipboardCapability?(deckToMac)
             case let .clipboardStart(origin, id, size, chunks) where origin == .steamDeck && deckClipboardAllowed:
                 guard incomingClipboard == nil, let transfer = IncomingClipboardTransfer(transferID: id, totalBytes: size, chunkCount: chunks) else { throw ProtocolError.invalidFrame }

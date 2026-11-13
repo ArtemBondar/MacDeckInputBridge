@@ -3,6 +3,17 @@ import Security
 import XCTest
 
 final class BridgeCoreTests: XCTestCase {
+    func testClipboardCapabilityAcceptsLateReplyAndLaterUnavailableUpdate() {
+        var state = ClipboardCapabilityState()
+        XCTAssertFalse(state.receive())
+        state.request()
+        XCTAssertTrue(state.timeout())
+        XCTAssertFalse(state.timeout())
+        XCTAssertTrue(state.receive())
+        XCTAssertTrue(state.receive())
+        XCTAssertFalse(state.timeout())
+    }
+
     private let pairing = try! PairingSecret(base64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
     private let expectedMappings: [UInt16: UInt16] = [
         0: 30, 1: 31, 2: 32, 3: 33, 4: 35, 5: 34, 6: 44, 7: 45, 8: 46, 9: 47,

@@ -35,6 +35,7 @@ pub struct ClipboardWatcher {
     cancel: Arc<Mutex<Option<wl_clipboard_rs::watch::CancelHandle>>>,
     sender: SyncSender<WatchEvent>,
     pending_text: Arc<Mutex<Option<(String, bool)>>>,
+    terminated: Arc<AtomicBool>,
 }
 
 pub enum WatchEvent {
@@ -50,6 +51,8 @@ impl ClipboardWatcher {
         let worker_sender = sender.clone();
         let pending_text = Arc::new(Mutex::new(None));
         let worker_pending = Arc::clone(&pending_text);
+        let terminated = Arc::new(AtomicBool::new(false));
+        let worker_terminated = Arc::clone(&terminated);
         let cancel = Arc::new(Mutex::new(None));
         let worker_cancel = Arc::clone(&cancel);
         thread::spawn(move || {
@@ -101,6 +104,9 @@ impl ClipboardWatcher {
                     }
                 }
             }
+            if !worker_stop.load(Ordering::Acquire) {
+                worker_terminated.store(true, Ordering::Release);
+            }
         });
         Self {
             events,
@@ -108,6 +114,7 @@ impl ClipboardWatcher {
             cancel,
             sender,
             pending_text,
+            terminated,
         }
     }
 
@@ -139,6 +146,10 @@ impl ClipboardWatcher {
 
     pub fn take_text(&self) -> Option<(String, bool)> {
         self.pending_text.lock().ok()?.take()
+    }
+
+    pub fn terminated(&self) -> bool {
+        self.terminated.load(Ordering::Acquire)
     }
 }
 

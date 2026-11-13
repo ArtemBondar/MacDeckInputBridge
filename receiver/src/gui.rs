@@ -87,6 +87,11 @@ fn clipboard_diagnostic(line: &str) -> Option<&str> {
         "Could not read plain text from the Steam Deck clipboard." => {
             return Some("Could not read plain text from the Steam Deck clipboard.")
         }
+        "Steam Deck clipboard monitoring stopped. Reconnect to restore clipboard sharing." => {
+            return Some(
+                "Steam Deck clipboard monitoring stopped. Reconnect to restore clipboard sharing.",
+            )
+        }
         _ => {}
     }
     let message = line.strip_prefix("Could not update the Steam Deck clipboard: ")?;
@@ -1260,6 +1265,14 @@ mod tests {
 
     #[test]
     fn clipboard_diagnostics_only_accept_known_safe_messages() {
+        assert_eq!(
+            clipboard_diagnostic(
+                "Steam Deck clipboard monitoring stopped. Reconnect to restore clipboard sharing."
+            ),
+            Some(
+                "Steam Deck clipboard monitoring stopped. Reconnect to restore clipboard sharing."
+            )
+        );
         assert_eq!(
             clipboard_diagnostic("Steam Deck clipboard updated from Mac."),
             Some("Clipboard received from Mac.")

@@ -292,6 +292,21 @@ fn handle_authenticated_client(
             }
             eprintln!("Could not read plain text from the Steam Deck clipboard.");
         }
+        if watcher_ready && watcher.as_ref().is_some_and(|watcher| watcher.terminated()) {
+            watcher_ready = false;
+            watcher = None;
+            eprintln!(
+                "Steam Deck clipboard monitoring stopped. Reconnect to restore clipboard sharing."
+            );
+            session.write_packet(
+                &mut response_stream,
+                next_response_sequence,
+                &Packet::ClipboardCapabilities { deck_to_mac: false },
+            )?;
+            next_response_sequence = next_response_sequence
+                .checked_add(1)
+                .ok_or(BridgeError::Handshake)?;
+        }
         if let Some((text, explicit)) = watcher.as_ref().and_then(|watcher| watcher.take_text()) {
             if !suppression.should_skip(&text, explicit) {
                 transfer_id = transfer_id.checked_add(1).ok_or(BridgeError::Handshake)?;

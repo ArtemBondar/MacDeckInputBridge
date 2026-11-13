@@ -82,6 +82,10 @@ private final class MenuBarModel: ObservableObject {
         sender.deckClipboardUnavailable = { [weak self] in
             self?.message = "Steam Deck clipboard sharing is unavailable. Enable it on the Deck in Desktop Mode, then reconnect."
         }
+        sender.deckClipboardAvailable = { [weak self] in
+            let unavailable = "Steam Deck clipboard sharing is unavailable. Enable it on the Deck in Desktop Mode, then reconnect."
+            if self?.message == unavailable { self?.message = nil }
+        }
         sender.deckClipboardReceived = { [weak self] success in
             self?.message = success ? "Clipboard received from Steam Deck." : "Could not update the Mac clipboard."
         }
