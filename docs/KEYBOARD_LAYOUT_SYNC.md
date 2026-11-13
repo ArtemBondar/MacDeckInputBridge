@@ -44,3 +44,24 @@ when reporting the problem:
 ```sh
 command -v qdbus6 qdbus-qt6 qdbus
 ```
+
+The receiver searches `MAC_DECK_QDBUS`, then `PATH`, then common system
+locations. Candidates must be executable by the current user; an unusable
+candidate is skipped. If the executable is in another location, set
+`MAC_DECK_QDBUS` to its full path in the receiver's environment, for example:
+
+```sh
+MAC_DECK_QDBUS=/path/to/qdbus6 ~/.local/bin/mac-deck-receiver layout-status
+```
+
+This only selects the tool: the Plasma session bus must also be available. A
+missing or unusable qdbus disables layout synchronization; keyboard forwarding
+continues using the Deck's current layout.
+
+If Plasma cannot provide its runtime layout list, the receiver falls back to
+its configured layout list and XKB descriptions under
+`/usr/share/X11/xkb/rules`. For installations using a different location, set
+`MAC_DECK_XKB_RULES_DIR` to the absolute path of the directory containing
+`base.lst` or `evdev.lst` in the receiver's environment. Unreadable or empty
+files fall back to the standard directory; missing descriptions fall back to
+layout codes. Runtime Plasma data always takes precedence.

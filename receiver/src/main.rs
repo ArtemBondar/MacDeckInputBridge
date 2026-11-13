@@ -5,8 +5,11 @@ use mac_deck_receiver::{
 };
 use std::{
     collections::{BTreeMap, HashMap},
-    env, io,
+    env,
+    ffi::CString,
+    io::{self, Read, Write},
     net::{Shutdown, TcpListener, TcpStream},
+    os::{fd::AsRawFd, unix::ffi::OsStrExt},
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Output, Stdio},
     sync::{
@@ -14,12 +17,14 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use wl_clipboard_rs::copy::{MimeType, Options as ClipboardOptions, Source as ClipboardSource};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(200);
+// Once a frame starts, do not let a stalled or trickling peer hold keys forever.
+const SESSION_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PENDING_HANDSHAKES: usize = 4;
 
 #[derive(Parser)]
@@ -187,20 +192,133 @@ fn handle_client(
     handle_authenticated_client(stream, &session, sink, &shutdown, None, None)
 }
 
+// Apply a single deadline to the entire handshake, including partial reads and
+// writes. Per-operation socket timeouts alone restart when a peer trickles data.
+struct HandshakeStream<'a> {
+    stream: &'a mut TcpStream,
+    deadline: Instant,
+}
+
+impl HandshakeStream<'_> {
+    fn remaining(&self) -> io::Result<Duration> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "handshake timed out"))
+    }
+}
+
+impl Read for HandshakeStream<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.stream.set_read_timeout(Some(self.remaining()?))?;
+        self.stream.read(buf)
+    }
+}
+
+impl Write for HandshakeStream<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.stream.set_write_timeout(Some(self.remaining()?))?;
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.remaining()?;
+        self.stream.flush()
+    }
+}
+
 fn receive_client_ready(
     stream: &mut TcpStream,
     pairing_secret: &PairingSecret,
 ) -> Result<SessionFramer, BridgeError> {
-    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
-    stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
+    receive_client_ready_before(stream, pairing_secret, HANDSHAKE_TIMEOUT)
+}
+
+fn receive_client_ready_before(
+    stream: &mut TcpStream,
+    pairing_secret: &PairingSecret,
+    timeout: Duration,
+) -> Result<SessionFramer, BridgeError> {
+    let mut handshake = HandshakeStream {
+        stream,
+        deadline: Instant::now() + timeout,
+    };
     let challenge = generate_challenge();
-    write_server_hello(stream, &challenge)?;
+    write_server_hello(&mut handshake, &challenge)?;
     let session = SessionFramer::new(derive_session_secret(pairing_secret, &challenge));
-    let (sequence, packet) = session.read_packet(stream)?;
+    let (sequence, packet) = session.read_packet(&mut handshake)?;
+    handshake.remaining()?;
     if sequence != 0 || packet != Packet::ClientReady {
         return Err(BridgeError::Handshake);
     }
     Ok(session)
+}
+
+// A pending slot protects only the unauthenticated phase, not the lifetime of
+// an accepted session. Release it on both success and failure.
+fn complete_pending_handshake(
+    stream: &mut TcpStream,
+    pairing_secret: &PairingSecret,
+    pending_handshakes: &AtomicUsize,
+) -> Result<SessionFramer, BridgeError> {
+    let result = receive_client_ready(stream, pairing_secret);
+    pending_handshakes.fetch_sub(1, Ordering::AcqRel);
+    result
+}
+
+// An idle session can wait indefinitely, but a started frame has a bounded
+// assembly time. Polling during a partial frame still observes shutdown.
+struct SessionFrameReader<'a> {
+    stream: &'a mut TcpStream,
+    shutdown: &'a AtomicBool,
+    deadline: Option<Instant>,
+    timeout: Duration,
+    bytes_read: usize,
+}
+
+impl Read for SessionFrameReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if self.shutdown.load(Ordering::Acquire) {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "receiver shutting down",
+                ));
+            }
+            let wait = if let Some(deadline) = self.deadline {
+                deadline
+                    .checked_duration_since(Instant::now())
+                    .filter(|remaining| !remaining.is_zero())
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::TimedOut, "incomplete frame timed out")
+                    })?
+                    .min(SESSION_POLL_INTERVAL)
+            } else {
+                SESSION_POLL_INTERVAL
+            };
+            self.stream.set_read_timeout(Some(wait))?;
+            match self.stream.read(buffer) {
+                Ok(count) => {
+                    if count > 0 {
+                        self.bytes_read += count;
+                        self.deadline
+                            .get_or_insert_with(|| Instant::now() + self.timeout);
+                    }
+                    return Ok(count);
+                }
+                Err(error)
+                    if self.deadline.is_some()
+                        && matches!(
+                            error.kind(),
+                            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                        ) =>
+                {
+                    continue
+                }
+                result => return result,
+            }
+        }
+    }
 }
 
 fn handle_authenticated_client(
@@ -211,10 +329,7 @@ fn handle_authenticated_client(
     layout_switcher: Option<&PlasmaLayoutSwitcher>,
     clipboard_sink: Option<&mut dyn ClipboardSink>,
 ) -> Result<(), BridgeError> {
-    // A bounded timeout makes shutdown deterministic without treating an idle
-    // keyboard as a failed session. If a partial frame spans the timeout, the
-    // connection is rejected safely by framing/authentication on its next read.
-    stream.set_read_timeout(Some(SESSION_POLL_INTERVAL))?;
+    // Idle reads poll for shutdown; partial frames use a separate total deadline.
     stream.set_write_timeout(None)?;
     let mut next_sequence = 1u64;
     // The TCP connection is full-duplex. Use a separate cloned handle for
@@ -228,13 +343,21 @@ fn handle_authenticated_client(
         if shutdown.load(Ordering::Acquire) {
             return Ok(());
         }
-        let (sequence, packet) = match session.read_packet(stream) {
+        let mut frame = SessionFrameReader {
+            stream,
+            shutdown,
+            deadline: None,
+            timeout: SESSION_FRAME_TIMEOUT,
+            bytes_read: 0,
+        };
+        let (sequence, packet) = match session.read_packet(&mut frame) {
             Ok(packet) => packet,
             Err(BridgeError::Io(error))
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                ) =>
+                if frame.bytes_read == 0
+                    && matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
             {
                 continue;
             }
@@ -516,38 +639,112 @@ fn find_qdbus() -> Result<PathBuf, String> {
         PathBuf::from("/usr/lib/qt6/bin/qdbus6"),
         PathBuf::from("/usr/lib/qt6/bin/qdbus"),
     ]);
-    candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            "qdbus was not found. Install or expose qdbus6/qdbus-qt6 in this Plasma session"
-                .to_owned()
-        })
+    select_qdbus(candidates).ok_or_else(|| {
+        "No executable qdbus found. Install qdbus6/qdbus-qt6 or set MAC_DECK_QDBUS to an executable path"
+            .to_owned()
+    })
+}
+
+fn select_qdbus(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|path| {
+        if !path.is_file() {
+            return false;
+        }
+        let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // Match the effective credentials used by the receiver; a non-executable
+        // file earlier in PATH must not hide a usable qdbus later in the search.
+        unsafe { libc::faccessat(libc::AT_FDCWD, path.as_ptr(), libc::X_OK, libc::AT_EACCESS) == 0 }
+    })
+}
+
+// qdbus output is normally small. Bound it so a malfunctioning command cannot
+// exhaust receiver memory while avoiding pipe-buffer deadlocks on larger lists.
+const QDBUS_OUTPUT_LIMIT: usize = 1024 * 1024;
+const QDBUS_TIMEOUT: Duration = Duration::from_secs(1);
+const QDBUS_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+fn nonblocking_pipe(pipe: &impl AsRawFd) -> io::Result<()> {
+    let fd = pipe.as_raw_fd();
+    // These descriptors are owned by the child-output handles, and remain open
+    // until the handles are dropped below.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn drain_qdbus_pipe(pipe: &mut impl Read, output: &mut Vec<u8>) -> io::Result<()> {
+    let mut buffer = [0; 4096];
+    loop {
+        match pipe.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(count) => {
+                if output.len() + count > QDBUS_OUTPUT_LIMIT {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "qdbus output exceeded the size limit",
+                    ));
+                }
+                output.extend_from_slice(&buffer[..count]);
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn qdbus_call(qdbus: &Path, arguments: &[&str]) -> io::Result<Output> {
-    const QDBUS_TIMEOUT: Duration = Duration::from_secs(1);
     let mut child = ProcessCommand::new(qdbus)
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let deadline = std::time::Instant::now() + QDBUS_TIMEOUT;
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output();
+    let result = (|| {
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("qdbus stdout unavailable"))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| io::Error::other("qdbus stderr unavailable"))?;
+        nonblocking_pipe(&stdout)?;
+        nonblocking_pipe(&stderr)?;
+        let mut stdout_bytes = Vec::new();
+        let mut stderr_bytes = Vec::new();
+        let deadline = Instant::now() + QDBUS_TIMEOUT;
+        loop {
+            drain_qdbus_pipe(&mut stdout, &mut stdout_bytes)?;
+            drain_qdbus_pipe(&mut stderr, &mut stderr_bytes)?;
+            if let Some(status) = child.try_wait()? {
+                // Read bytes written between the last drain and process exit.
+                drain_qdbus_pipe(&mut stdout, &mut stdout_bytes)?;
+                drain_qdbus_pipe(&mut stderr, &mut stderr_bytes)?;
+                return Ok(Output {
+                    status,
+                    stdout: stdout_bytes,
+                    stderr: stderr_bytes,
+                });
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Plasma D-Bus did not answer within one second",
+                ));
+            }
+            thread::sleep(QDBUS_POLL_INTERVAL);
         }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Plasma D-Bus did not answer within one second",
-            ));
-        }
-        thread::sleep(Duration::from_millis(10));
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
     }
+    result
 }
 
 fn qdbus_boolean_reply_accepted(stdout: &[u8]) -> bool {
@@ -699,34 +896,45 @@ fn read_kxkbrc_layout_list() -> Option<Vec<String>> {
 }
 
 fn read_xkb_layout_descriptions() -> BTreeMap<String, String> {
-    let rules_files = [
-        "/usr/share/X11/xkb/rules/base.lst",
-        "/usr/share/X11/xkb/rules/evdev.lst",
-    ];
-    for rules_file in rules_files {
-        let Ok(contents) = std::fs::read_to_string(rules_file) else {
-            continue;
-        };
-        let mut descriptions = BTreeMap::new();
-        let mut in_layout_section = false;
-        for line in contents.lines() {
-            let line = line.trim();
-            if line.starts_with('!') {
-                in_layout_section = line == "! layout";
-                continue;
-            }
-            if !in_layout_section || line.is_empty() {
-                continue;
-            }
-            let mut fields = line.split_whitespace();
-            let Some(code) = fields.next() else { continue };
-            let description = fields.collect::<Vec<_>>().join(" ");
-            if !description.is_empty() {
-                descriptions.insert(code.to_owned(), description);
-            }
+    let mut directories = Vec::new();
+    if let Some(directory) = env::var_os("MAC_DECK_XKB_RULES_DIR") {
+        let directory = PathBuf::from(directory);
+        // A launcher can have a different working directory from a terminal.
+        if directory.is_absolute() {
+            directories.push(directory);
         }
-        if !descriptions.is_empty() {
-            return descriptions;
+    }
+    directories.push(PathBuf::from("/usr/share/X11/xkb/rules"));
+    read_xkb_layout_descriptions_from(&directories)
+}
+
+fn read_xkb_layout_descriptions_from(directories: &[PathBuf]) -> BTreeMap<String, String> {
+    for directory in directories {
+        for name in ["base.lst", "evdev.lst"] {
+            let Ok(contents) = std::fs::read_to_string(directory.join(name)) else {
+                continue;
+            };
+            let mut descriptions = BTreeMap::new();
+            let mut in_layout_section = false;
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.starts_with('!') {
+                    in_layout_section = line == "! layout";
+                    continue;
+                }
+                if !in_layout_section || line.is_empty() {
+                    continue;
+                }
+                let mut fields = line.split_whitespace();
+                let Some(code) = fields.next() else { continue };
+                let description = fields.collect::<Vec<_>>().join(" ");
+                if !description.is_empty() {
+                    descriptions.insert(code.to_owned(), description);
+                }
+            }
+            if !descriptions.is_empty() {
+                return descriptions;
+            }
         }
     }
     BTreeMap::new()
@@ -1086,7 +1294,11 @@ fn serve(
                 let shutdown = Arc::clone(&shutdown);
                 let layout_switcher = layout_switcher.clone();
                 workers.push(thread::spawn(move || {
-                    let session = receive_client_ready(&mut stream, &pairing_secret);
+                    let session = complete_pending_handshake(
+                        &mut stream,
+                        &pairing_secret,
+                        &pending_handshakes,
+                    );
                     if let Ok(session) = session {
                         // A receiver has exactly one uinput keyboard. Do not confirm
                         // REMOTE for a second peer while a first peer owns it.
@@ -1132,7 +1344,6 @@ fn serve(
                         }
                     }
                     let _ = stream.shutdown(Shutdown::Both);
-                    pending_handshakes.fetch_sub(1, Ordering::AcqRel);
                 }));
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -1291,6 +1502,198 @@ mod receiver_tests {
             expect_next_sequence(&mut expected, 3),
             Err(BridgeError::Handshake)
         ));
+    }
+
+    #[test]
+    fn partial_session_frame_times_out_without_becoming_an_idle_read() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let shutdown = AtomicBool::new(false);
+            let mut reader = SessionFrameReader {
+                stream: &mut stream,
+                shutdown: &shutdown,
+                deadline: None,
+                timeout: Duration::from_millis(200),
+                bytes_read: 0,
+            };
+            let mut data = [0; 4];
+            let error = reader.read_exact(&mut data).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            assert_eq!(reader.bytes_read, 1);
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        client.write_all(&[0]).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn session_frame_deadline_is_not_extended_by_trickled_bytes() {
+        use std::sync::mpsc;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let shutdown = AtomicBool::new(false);
+            let mut reader = SessionFrameReader {
+                stream: &mut stream,
+                shutdown: &shutdown,
+                deadline: None,
+                timeout: Duration::from_millis(200),
+                bytes_read: 0,
+            };
+            let result = reader.read_exact(&mut [0; 4096]);
+            done_tx.send(result.unwrap_err().kind()).unwrap();
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            while stop_rx.recv_timeout(Duration::from_millis(20)).is_err() {
+                if client.write_all(&[0]).is_err() {
+                    break;
+                }
+            }
+        });
+        let completed = done_rx.recv_timeout(Duration::from_secs(2));
+        let _ = stop_tx.send(());
+        writer.join().unwrap();
+        server.join().unwrap();
+        assert_eq!(completed.unwrap(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn partial_frame_failure_releases_an_held_key() {
+        let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_pairing = pairing.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let session = SessionFramer::new(server_pairing);
+            let mut sink = TestSink::default();
+            let shutdown = AtomicBool::new(false);
+            let result = handle_authenticated_client(
+                &mut stream,
+                &session,
+                &mut sink,
+                &shutdown,
+                None,
+                None,
+            );
+            assert!(
+                matches!(result, Err(BridgeError::Io(error)) if error.kind() == io::ErrorKind::TimedOut)
+            );
+            assert!(sink.held.contains(&30));
+            // Match the receiver worker's disconnect cleanup.
+            sink.release_all().unwrap();
+            assert!(sink.held.is_empty());
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        let session = SessionFramer::new(pairing);
+        session
+            .write_packet(&mut client, 1, &Packet::Key { code: 30, value: 1 })
+            .unwrap();
+        client.write_all(&[0]).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn idle_session_read_remains_distinct_from_a_partial_frame() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let shutdown = AtomicBool::new(false);
+            let mut reader = SessionFrameReader {
+                stream: &mut stream,
+                shutdown: &shutdown,
+                deadline: None,
+                timeout: SESSION_FRAME_TIMEOUT,
+                bytes_read: 0,
+            };
+            let error = reader.read(&mut [0; 4]).unwrap_err();
+            assert!(matches!(
+                error.kind(),
+                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+            ));
+            assert_eq!(reader.bytes_read, 0);
+        });
+        let _client = TcpStream::connect(address).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn pending_handshake_slot_released_before_session_ends_and_on_failure() {
+        let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+        for should_authenticate in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let pending = Arc::new(AtomicUsize::new(1));
+            let pending_server = Arc::clone(&pending);
+            let server_pairing = pairing.clone();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let result =
+                    complete_pending_handshake(&mut stream, &server_pairing, &pending_server);
+                assert_eq!(result.is_ok(), should_authenticate);
+                assert_eq!(pending_server.load(Ordering::Acquire), 0);
+                // Keep an authenticated connection open after its slot is released.
+                if should_authenticate {
+                    let mut signal = [0];
+                    stream.read_exact(&mut signal).unwrap();
+                }
+            });
+            let mut client = TcpStream::connect(address).unwrap();
+            let challenge = mac_deck_receiver::read_server_hello(&mut client).unwrap();
+            let session = SessionFramer::new(derive_session_secret(&pairing, &challenge));
+            let packet = if should_authenticate {
+                Packet::ClientReady
+            } else {
+                Packet::Ping
+            };
+            session.write_packet(&mut client, 0, &packet).unwrap();
+            if should_authenticate {
+                // This byte cannot be read until the server releases its slot.
+                client.write_all(&[1]).unwrap();
+            }
+            server.join().unwrap();
+            assert_eq!(pending.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn handshake_deadline_cannot_be_extended_by_partial_data() {
+        use std::sync::mpsc;
+        let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let result =
+                receive_client_ready_before(&mut stream, &pairing, Duration::from_millis(200));
+            done_tx.send(result.is_err()).unwrap();
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        mac_deck_receiver::read_server_hello(&mut client).unwrap();
+        // Advertise a large frame and repeatedly write partial payload bytes;
+        // each arrives within the per-read timeout, but the total exceeds it.
+        client.write_all(&4096u32.to_be_bytes()).unwrap();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            while stop_rx.recv_timeout(Duration::from_millis(20)).is_err() {
+                if client.write_all(&[0]).is_err() {
+                    break;
+                }
+            }
+        });
+        let completed = done_rx.recv_timeout(Duration::from_secs(2));
+        let _ = stop_tx.send(());
+        writer.join().unwrap();
+        server.join().unwrap();
+        assert!(completed.unwrap());
     }
 
     #[test]
@@ -1509,6 +1912,92 @@ mod receiver_tests {
             automatic_layout_index("com.apple.keylayout.Ukrainian", &layouts),
             Some(1)
         );
+    }
+
+    #[test]
+    fn xkb_rules_fall_back_to_the_next_usable_file_and_directory() {
+        let directory = std::env::temp_dir().join(format!(
+            "macdeck-xkb-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let missing = directory.join("missing");
+        let custom = directory.join("custom");
+        let fallback = directory.join("fallback");
+        std::fs::create_dir_all(&custom).unwrap();
+        std::fs::create_dir_all(&fallback).unwrap();
+        std::fs::write(custom.join("base.lst"), "! model\n  pc105 Generic\n").unwrap();
+        std::fs::write(
+            custom.join("evdev.lst"),
+            "! layout\n  ua Ukrainian\n! variant\n  custom Ignore\n",
+        )
+        .unwrap();
+        std::fs::write(fallback.join("base.lst"), "! layout\n  us English (US)\n").unwrap();
+        assert_eq!(
+            read_xkb_layout_descriptions_from(&[missing.clone(), custom.clone(), fallback.clone()]),
+            BTreeMap::from([("ua".to_owned(), "Ukrainian".to_owned())]),
+        );
+        assert_eq!(
+            read_xkb_layout_descriptions_from(&[missing.clone(), fallback]),
+            BTreeMap::from([("us".to_owned(), "English (US)".to_owned())]),
+        );
+        assert!(read_xkb_layout_descriptions_from(&[missing]).is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn qdbus_discovery_skips_non_executable_files_and_reports_no_candidate() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "macdeck-qdbus-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let blocked = directory.join("qdbus6");
+        let usable = directory.join("qdbus");
+        std::fs::write(&blocked, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(&usable, b"#!/bin/sh\nprintf 'true\\n'\n").unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&usable, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let selected = select_qdbus([blocked.clone(), usable.clone()]).unwrap();
+        assert_eq!(selected, usable);
+        let output = qdbus_call(&selected, &[]).unwrap();
+        assert!(output.status.success());
+        assert!(qdbus_boolean_reply_accepted(&output.stdout));
+        assert_eq!(select_qdbus([directory.clone(), blocked]), None);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn qdbus_drains_output_larger_than_a_pipe_buffer() {
+        let output = qdbus_call(
+            Path::new("/bin/sh"),
+            &[
+                "-c",
+                "head -c 131072 /dev/zero; head -c 131072 /dev/zero >&2",
+            ],
+        )
+        .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 131072);
+        assert_eq!(output.stderr.len(), 131072);
+    }
+
+    #[test]
+    fn qdbus_rejects_excess_output_and_reaps_timed_out_child() {
+        let excess = qdbus_call(Path::new("/bin/sh"), &["-c", "head -c 1100000 /dev/zero"]);
+        assert_eq!(excess.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        let timeout = qdbus_call(Path::new("/bin/sh"), &["-c", "exec sleep 2"]);
+        assert_eq!(timeout.unwrap_err().kind(), io::ErrorKind::TimedOut);
     }
 
     #[test]
