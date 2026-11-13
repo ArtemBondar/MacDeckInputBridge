@@ -9,7 +9,7 @@ use std::{
     ffi::CString,
     io::{self, Read, Write},
     net::{Shutdown, TcpListener, TcpStream},
-    os::unix::ffi::OsStrExt,
+    os::{fd::AsRawFd, unix::ffi::OsStrExt},
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Output, Stdio},
     sync::{
@@ -571,29 +571,92 @@ fn select_qdbus(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf
     })
 }
 
+// qdbus output is normally small. Bound it so a malfunctioning command cannot
+// exhaust receiver memory while avoiding pipe-buffer deadlocks on larger lists.
+const QDBUS_OUTPUT_LIMIT: usize = 1024 * 1024;
+const QDBUS_TIMEOUT: Duration = Duration::from_secs(1);
+const QDBUS_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+fn nonblocking_pipe(pipe: &impl AsRawFd) -> io::Result<()> {
+    let fd = pipe.as_raw_fd();
+    // These descriptors are owned by the child-output handles, and remain open
+    // until the handles are dropped below.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn drain_qdbus_pipe(pipe: &mut impl Read, output: &mut Vec<u8>) -> io::Result<()> {
+    let mut buffer = [0; 4096];
+    loop {
+        match pipe.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(count) => {
+                if output.len() + count > QDBUS_OUTPUT_LIMIT {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "qdbus output exceeded the size limit",
+                    ));
+                }
+                output.extend_from_slice(&buffer[..count]);
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn qdbus_call(qdbus: &Path, arguments: &[&str]) -> io::Result<Output> {
-    const QDBUS_TIMEOUT: Duration = Duration::from_secs(1);
     let mut child = ProcessCommand::new(qdbus)
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let deadline = std::time::Instant::now() + QDBUS_TIMEOUT;
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output();
+    let result = (|| {
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("qdbus stdout unavailable"))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| io::Error::other("qdbus stderr unavailable"))?;
+        nonblocking_pipe(&stdout)?;
+        nonblocking_pipe(&stderr)?;
+        let mut stdout_bytes = Vec::new();
+        let mut stderr_bytes = Vec::new();
+        let deadline = Instant::now() + QDBUS_TIMEOUT;
+        loop {
+            drain_qdbus_pipe(&mut stdout, &mut stdout_bytes)?;
+            drain_qdbus_pipe(&mut stderr, &mut stderr_bytes)?;
+            if let Some(status) = child.try_wait()? {
+                // Read bytes written between the last drain and process exit.
+                drain_qdbus_pipe(&mut stdout, &mut stdout_bytes)?;
+                drain_qdbus_pipe(&mut stderr, &mut stderr_bytes)?;
+                return Ok(Output {
+                    status,
+                    stdout: stdout_bytes,
+                    stderr: stderr_bytes,
+                });
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Plasma D-Bus did not answer within one second",
+                ));
+            }
+            thread::sleep(QDBUS_POLL_INTERVAL);
         }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Plasma D-Bus did not answer within one second",
-            ));
-        }
-        thread::sleep(Duration::from_millis(10));
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
     }
+    result
 }
 
 fn qdbus_boolean_reply_accepted(stdout: &[u8]) -> bool {
@@ -1565,6 +1628,29 @@ mod receiver_tests {
         assert!(qdbus_boolean_reply_accepted(&output.stdout));
         assert_eq!(select_qdbus([directory.clone(), blocked]), None);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn qdbus_drains_output_larger_than_a_pipe_buffer() {
+        let output = qdbus_call(
+            Path::new("/bin/sh"),
+            &[
+                "-c",
+                "head -c 131072 /dev/zero; head -c 131072 /dev/zero >&2",
+            ],
+        )
+        .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 131072);
+        assert_eq!(output.stderr.len(), 131072);
+    }
+
+    #[test]
+    fn qdbus_rejects_excess_output_and_reaps_timed_out_child() {
+        let excess = qdbus_call(Path::new("/bin/sh"), &["-c", "head -c 1100000 /dev/zero"]);
+        assert_eq!(excess.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        let timeout = qdbus_call(Path::new("/bin/sh"), &["-c", "exec sleep 2"]);
+        assert_eq!(timeout.unwrap_err().kind(), io::ErrorKind::TimedOut);
     }
 
     #[test]
