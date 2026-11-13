@@ -16,6 +16,9 @@ public final class SenderController {
     /// The receiver did not opt into clipboard transfer for this encrypted
     /// session. The callback deliberately carries no clipboard data.
     public var clipboardSynchronizationUnavailable: (() -> Void)?
+    /// A content-free acknowledgement from the Steam Deck after a clipboard
+    /// transfer has completed. It never exposes the copied text.
+    public var clipboardDeliveryResult: ((ClipboardDelivery) -> Void)?
 
     private var state = InputStateMachine()
     private var client: SenderClient?
@@ -80,6 +83,9 @@ public final class SenderController {
         }
         client?.onFailure = { [weak self] in
             DispatchQueue.main.async { self?.connectionLost() }
+        }
+        client?.onClipboardDelivery = { [weak self] delivery in
+            DispatchQueue.main.async { self?.clipboardDeliveryResult?(delivery) }
         }
     }
 
@@ -518,6 +524,7 @@ private final class SenderClient {
     private var handshakeTimeoutWorkItem: DispatchWorkItem?
     var onReady: ((ReceiverCapabilities) -> Void)?
     var onFailure: (() -> Void)?
+    var onClipboardDelivery: ((ClipboardDelivery) -> Void)?
 
     init(pairingSecret: String, retryPolicy: ConnectionRetryPolicy = .deckReceiverStartup) throws {
         pairing = try PairingSecret(base64: pairingSecret)
@@ -626,7 +633,13 @@ private final class SenderClient {
 
         let packet = try session.open(combined: frame)
         self.session = session
-        guard !isReady else { throw ProtocolError.invalidFrame }
+        if isReady {
+            guard case let .clipboardDelivery(origin, _, delivery) = packet, origin == .mac else {
+                throw ProtocolError.invalidFrame
+            }
+            onClipboardDelivery?(delivery)
+            return
+        }
         let capabilities: ReceiverCapabilities
         switch packet {
         case .serverReady:

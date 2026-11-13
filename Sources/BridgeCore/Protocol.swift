@@ -10,6 +10,14 @@ public enum ClipboardOrigin: UInt8, Equatable, Sendable {
     case steamDeck = 2
 }
 
+/// Content-free acknowledgement for a clipboard transfer. Clipboard contents
+/// are never included in diagnostics, settings, or protocol status messages.
+public enum ClipboardDelivery: UInt8, Equatable, Sendable {
+    case written = 1
+    case unavailable = 2
+    case failed = 3
+}
+
 public enum BridgePacket: Equatable, Sendable {
     public static let maximumClipboardTextBytes = 65_536
     /// Intentionally below the encrypted frame limit after packet, sequence,
@@ -31,6 +39,7 @@ public enum BridgePacket: Equatable, Sendable {
     case clipboardStart(origin: ClipboardOrigin, transferID: UInt64, totalBytes: UInt32, chunkCount: UInt16)
     case clipboardChunk(origin: ClipboardOrigin, transferID: UInt64, index: UInt16, bytes: Data)
     case clipboardEnd(origin: ClipboardOrigin, transferID: UInt64)
+    case clipboardDelivery(origin: ClipboardOrigin, transferID: UInt64, delivery: ClipboardDelivery)
 
     public func encoded() -> Data {
         switch self {
@@ -63,6 +72,11 @@ public enum BridgePacket: Equatable, Sendable {
         case let .clipboardEnd(origin, transferID):
             var result = Data([10, origin.rawValue])
             result.appendInteger(transferID)
+            return result
+        case let .clipboardDelivery(origin, transferID, delivery):
+            var result = Data([13, origin.rawValue])
+            result.appendInteger(transferID)
+            result.append(delivery.rawValue)
             return result
         }
     }
@@ -106,6 +120,11 @@ public enum BridgePacket: Equatable, Sendable {
                   let origin = ClipboardOrigin(rawValue: bytes[1]),
                   let transferID = Self.integer(bytes, offset: 2, as: UInt64.self) {
             self = .clipboardEnd(origin: origin, transferID: transferID)
+        } else if bytes.count == 11, bytes[0] == 13,
+                  let origin = ClipboardOrigin(rawValue: bytes[1]),
+                  let transferID = Self.integer(bytes, offset: 2, as: UInt64.self),
+                  let delivery = ClipboardDelivery(rawValue: bytes[10]) {
+            self = .clipboardDelivery(origin: origin, transferID: transferID, delivery: delivery)
         } else { return nil }
     }
 

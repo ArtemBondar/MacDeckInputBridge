@@ -1,7 +1,7 @@
 use clap::{ArgAction, Parser, Subcommand};
 use mac_deck_receiver::{
-    derive_session_secret, generate_challenge, write_server_hello, BridgeError, ClipboardOrigin,
-    Packet, PairingSecret, SessionFramer, MAX_CLIPBOARD_TEXT_BYTES,
+    derive_session_secret, generate_challenge, write_server_hello, BridgeError, ClipboardDelivery,
+    ClipboardOrigin, Packet, PairingSecret, SessionFramer, MAX_CLIPBOARD_TEXT_BYTES,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -217,6 +217,11 @@ fn handle_authenticated_client(
     stream.set_read_timeout(Some(SESSION_POLL_INTERVAL))?;
     stream.set_write_timeout(None)?;
     let mut next_sequence = 1u64;
+    // The TCP connection is full-duplex. Use a separate cloned handle for
+    // acknowledgements so the receiver can keep accepting keyboard input while
+    // reporting the result of a completed clipboard transfer.
+    let mut response_stream = stream.try_clone()?;
+    let mut next_response_sequence = 1u64;
     let mut clipboard_transfer: Option<ClipboardTransfer> = None;
     let mut clipboard_sink = clipboard_sink;
     loop {
@@ -287,13 +292,33 @@ fn handle_authenticated_client(
                     .take()
                     .ok_or(BridgeError::InvalidPacket)?
                     .finish(transfer_id)?;
-                if let Some(sink) = clipboard_sink.as_deref_mut() {
-                    // Clipboard support is optional. A compositor failure must not
-                    // terminate keyboard forwarding or expose the copied text.
-                    if let Err(error) = sink.set_text(&text) {
-                        eprintln!("Could not update the Steam Deck clipboard: {error}");
-                    }
-                }
+                let delivery = match clipboard_sink.as_deref_mut() {
+                    Some(sink) => match sink.set_text(&text) {
+                        Ok(()) => {
+                            eprintln!("Steam Deck clipboard updated from Mac.");
+                            ClipboardDelivery::Written
+                        }
+                        Err(error) => {
+                            // Clipboard support is optional. A compositor failure must not
+                            // terminate keyboard forwarding or expose copied content.
+                            eprintln!("Could not update the Steam Deck clipboard: {error}");
+                            ClipboardDelivery::Failed
+                        }
+                    },
+                    None => ClipboardDelivery::Unavailable,
+                };
+                session.write_packet(
+                    &mut response_stream,
+                    next_response_sequence,
+                    &Packet::ClipboardDelivery {
+                        origin: ClipboardOrigin::Mac,
+                        transfer_id,
+                        delivery,
+                    },
+                )?;
+                next_response_sequence = next_response_sequence
+                    .checked_add(1)
+                    .ok_or(BridgeError::Handshake)?;
             }
             Packet::Key { .. }
             | Packet::ClientReady
@@ -303,7 +328,8 @@ fn handle_authenticated_client(
             | Packet::ServerReadyWithLayoutAndClipboardSync
             | Packet::ClipboardStart { .. }
             | Packet::ClipboardChunk { .. }
-            | Packet::ClipboardEnd { .. } => return Err(BridgeError::InvalidPacket),
+            | Packet::ClipboardEnd { .. }
+            | Packet::ClipboardDelivery { .. } => return Err(BridgeError::InvalidPacket),
             Packet::ReleaseAll => sink.release_all()?,
             Packet::Ping => {}
         }
@@ -1197,6 +1223,16 @@ mod receiver_tests {
         }
     }
 
+    struct TestClipboardSink {
+        result: Result<(), String>,
+    }
+
+    impl ClipboardSink for TestClipboardSink {
+        fn set_text(&mut self, _: &str) -> Result<(), String> {
+            self.result.clone()
+        }
+    }
+
     #[test]
     fn clipboard_capability_rejects_gaming_sessions() {
         assert!(gaming_session(Some("gamescope"), None));
@@ -1289,6 +1325,90 @@ mod receiver_tests {
             server.join().unwrap(),
             Err(BridgeError::Handshake)
         ));
+    }
+
+    #[test]
+    fn clipboard_transfer_reports_a_content_free_delivery_result() {
+        let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_pairing = pairing.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let session = receive_client_ready(&mut stream, &server_pairing).unwrap();
+            session
+                .write_packet(&mut stream, 0, &Packet::ServerReadyWithClipboardSync)
+                .unwrap();
+            let shutdown = AtomicBool::new(false);
+            let mut keys = TestSink::default();
+            let mut clipboard = TestClipboardSink { result: Ok(()) };
+            handle_authenticated_client(
+                &mut stream,
+                &session,
+                &mut keys,
+                &shutdown,
+                None,
+                Some(&mut clipboard),
+            )
+        });
+
+        let mut client = TcpStream::connect(address).unwrap();
+        let challenge = mac_deck_receiver::read_server_hello(&mut client).unwrap();
+        let session = SessionFramer::new(derive_session_secret(&pairing, &challenge));
+        session
+            .write_packet(&mut client, 0, &Packet::ClientReady)
+            .unwrap();
+        assert_eq!(
+            session.read_packet(&mut client).unwrap(),
+            (0, Packet::ServerReadyWithClipboardSync)
+        );
+        session
+            .write_packet(
+                &mut client,
+                1,
+                &Packet::ClipboardStart {
+                    origin: ClipboardOrigin::Mac,
+                    transfer_id: 9,
+                    total_bytes: 2,
+                    chunk_count: 1,
+                },
+            )
+            .unwrap();
+        session
+            .write_packet(
+                &mut client,
+                2,
+                &Packet::ClipboardChunk {
+                    origin: ClipboardOrigin::Mac,
+                    transfer_id: 9,
+                    index: 0,
+                    bytes: b"ok".to_vec(),
+                },
+            )
+            .unwrap();
+        session
+            .write_packet(
+                &mut client,
+                3,
+                &Packet::ClipboardEnd {
+                    origin: ClipboardOrigin::Mac,
+                    transfer_id: 9,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            session.read_packet(&mut client).unwrap(),
+            (
+                1,
+                Packet::ClipboardDelivery {
+                    origin: ClipboardOrigin::Mac,
+                    transfer_id: 9,
+                    delivery: ClipboardDelivery::Written,
+                }
+            )
+        );
+        drop(client);
+        assert!(server.join().unwrap().is_err());
     }
 
     #[test]

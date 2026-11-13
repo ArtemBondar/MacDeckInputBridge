@@ -42,6 +42,33 @@ impl ClipboardOrigin {
     }
 }
 
+/// Content-free result of asking the Steam Deck session to own the clipboard.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClipboardDelivery {
+    Written,
+    Unavailable,
+    Failed,
+}
+
+impl ClipboardDelivery {
+    fn encode(self) -> u8 {
+        match self {
+            Self::Written => 1,
+            Self::Unavailable => 2,
+            Self::Failed => 3,
+        }
+    }
+
+    fn decode(byte: u8) -> Result<Self, BridgeError> {
+        match byte {
+            1 => Ok(Self::Written),
+            2 => Ok(Self::Unavailable),
+            3 => Ok(Self::Failed),
+            _ => Err(BridgeError::InvalidPacket),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Packet {
     Key {
@@ -71,6 +98,11 @@ pub enum Packet {
     ClipboardEnd {
         origin: ClipboardOrigin,
         transfer_id: u64,
+    },
+    ClipboardDelivery {
+        origin: ClipboardOrigin,
+        transfer_id: u64,
+        delivery: ClipboardDelivery,
     },
 }
 
@@ -141,6 +173,16 @@ impl Packet {
             } => {
                 let mut encoded = vec![10, origin.encode()];
                 encoded.extend(transfer_id.to_be_bytes());
+                encoded
+            }
+            Self::ClipboardDelivery {
+                origin,
+                transfer_id,
+                delivery,
+            } => {
+                let mut encoded = vec![13, origin.encode()];
+                encoded.extend(transfer_id.to_be_bytes());
+                encoded.push(delivery.encode());
                 encoded
             }
         }
@@ -229,6 +271,17 @@ impl Packet {
                         .map_err(|_| BridgeError::InvalidPacket)?,
                 ),
             }),
+            [13, origin, transfer_id @ ..] if transfer_id.len() == 9 => {
+                Ok(Self::ClipboardDelivery {
+                    origin: ClipboardOrigin::decode(*origin)?,
+                    transfer_id: u64::from_be_bytes(
+                        transfer_id[..8]
+                            .try_into()
+                            .map_err(|_| BridgeError::InvalidPacket)?,
+                    ),
+                    delivery: ClipboardDelivery::decode(transfer_id[8])?,
+                })
+            }
             _ => Err(BridgeError::InvalidPacket),
         }
     }
@@ -494,6 +547,16 @@ mod tests {
         .concat();
         assert!(matches!(
             Packet::decode(&oversized_chunk),
+            Err(BridgeError::InvalidPacket)
+        ));
+        let delivery = Packet::ClipboardDelivery {
+            origin: ClipboardOrigin::Mac,
+            transfer_id: 42,
+            delivery: ClipboardDelivery::Written,
+        };
+        assert_eq!(Packet::decode(&delivery.encode()).unwrap(), delivery);
+        assert!(matches!(
+            Packet::decode(&[13, 1, 0, 0, 0, 0, 0, 0, 0, 42, 99]),
             Err(BridgeError::InvalidPacket)
         ));
     }
