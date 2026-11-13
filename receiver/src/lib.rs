@@ -271,15 +271,17 @@ impl Packet {
                         .map_err(|_| BridgeError::InvalidPacket)?,
                 ),
             }),
-            [13, origin, transfer_id @ ..] if transfer_id.len() == 9 => Ok(Self::ClipboardDelivery {
-                origin: ClipboardOrigin::decode(*origin)?,
-                transfer_id: u64::from_be_bytes(
-                    transfer_id[..8]
-                        .try_into()
-                        .map_err(|_| BridgeError::InvalidPacket)?,
-                ),
-                delivery: ClipboardDelivery::decode(transfer_id[8])?,
-            }),
+            [13, origin, transfer_id @ ..] if transfer_id.len() == 9 => {
+                Ok(Self::ClipboardDelivery {
+                    origin: ClipboardOrigin::decode(*origin)?,
+                    transfer_id: u64::from_be_bytes(
+                        transfer_id[..8]
+                            .try_into()
+                            .map_err(|_| BridgeError::InvalidPacket)?,
+                    ),
+                    delivery: ClipboardDelivery::decode(transfer_id[8])?,
+                })
+            }
             _ => Err(BridgeError::InvalidPacket),
         }
     }
