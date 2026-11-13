@@ -505,6 +505,62 @@ final class BridgeCoreTests: XCTestCase {
             )
         }
     }
+
+    func testClipboardProtocolChunksBoundedUTF8TextAndKeepsDirectionExplicit() throws {
+        let text = String(repeating: "🙂", count: 1_100)
+        let packets = try XCTUnwrap(
+            BridgePacket.clipboardPackets(origin: .mac, transferID: 42, text: text)
+        )
+        XCTAssertEqual(
+            packets.first,
+            .clipboardStart(
+                origin: .mac,
+                transferID: 42,
+                totalBytes: UInt32(text.utf8.count),
+                chunkCount: 2
+            )
+        )
+        XCTAssertEqual(packets.last, .clipboardEnd(origin: .mac, transferID: 42))
+        for packet in packets {
+            XCTAssertEqual(BridgePacket(encoded: packet.encoded()), packet)
+            if case let .clipboardChunk(_, _, _, bytes) = packet {
+                XCTAssertFalse(bytes.isEmpty)
+                XCTAssertLessThanOrEqual(bytes.count, BridgePacket.maximumClipboardChunkBytes)
+            }
+        }
+    }
+
+    func testClipboardProtocolRejectsMalformedAndOversizedTransfers() {
+        XCTAssertNil(BridgePacket(encoded: Data([8, ClipboardOrigin.mac.rawValue] + Array(repeating: 0, count: 12) + [0, 1])))
+        XCTAssertNil(BridgePacket(encoded: Data([9, ClipboardOrigin.mac.rawValue] + Array(repeating: 0, count: 10))))
+        XCTAssertNil(BridgePacket.clipboardPackets(
+            origin: .mac,
+            transferID: 1,
+            text: String(repeating: "x", count: BridgePacket.maximumClipboardTextBytes + 1)
+        ))
+        XCTAssertNil(BridgePacket(encoded: Data([10, ClipboardOrigin.steamDeck.rawValue] + Array(repeating: 0, count: 7))))
+    }
+
+    func testClipboardSynchronizationDoesNotSendExistingDataOrAfterCancellation() {
+        var synchronization = ClipboardSynchronizationState()
+        XCTAssertNil(synchronization.packetsForChange(changeCount: 1, text: "private", origin: .mac))
+        synchronization.start(changeCount: 1)
+        XCTAssertNil(synchronization.packetsForChange(changeCount: 1, text: "private", origin: .mac))
+        let packets = synchronization.packetsForChange(changeCount: 2, text: "new text", origin: .mac)
+        XCTAssertEqual(packets?.first, .clipboardStart(origin: .mac, transferID: 1, totalBytes: 8, chunkCount: 1))
+        synchronization.reset()
+        XCTAssertNil(synchronization.packetsForChange(changeCount: 3, text: "after disconnect", origin: .mac))
+    }
+
+    func testClipboardSynchronizationIsDisabledByDefaultAndPersistsOnlyTheChoice() throws {
+        let suite = "MacDeckInputBridgeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = BridgeSettingsStore(defaults: defaults, secretStore: InMemoryPairingSecretStore())
+        XCTAssertFalse(store.loadSettings().syncClipboardFromMac)
+        try store.saveSettings(BridgeSettings(host: "deck.local", syncClipboardFromMac: true))
+        XCTAssertTrue(store.loadSettings().syncClipboardFromMac)
+    }
 }
 
 private extension Data {

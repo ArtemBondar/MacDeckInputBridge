@@ -13,19 +13,65 @@ use std::io::{self, Read, Write};
 use thiserror::Error;
 
 pub const MAX_FRAME_SIZE: usize = 4096;
+pub const MAX_CLIPBOARD_TEXT_BYTES: usize = 65_536;
+pub const MAX_CLIPBOARD_CHUNK_BYTES: usize = 3_840;
 pub const SERVER_HELLO_TYPE: u8 = 0x10;
 pub const PROTOCOL_VERSION: u8 = 0x01;
 pub const SESSION_INFO: &[u8] = b"MacDeckInputBridge/session/v1";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClipboardOrigin {
+    Mac,
+    SteamDeck,
+}
+
+impl ClipboardOrigin {
+    fn encode(&self) -> u8 {
+        match self {
+            Self::Mac => 1,
+            Self::SteamDeck => 2,
+        }
+    }
+
+    fn decode(byte: u8) -> Result<Self, BridgeError> {
+        match byte {
+            1 => Ok(Self::Mac),
+            2 => Ok(Self::SteamDeck),
+            _ => Err(BridgeError::InvalidPacket),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Packet {
-    Key { code: u16, value: u8 },
+    Key {
+        code: u16,
+        value: u8,
+    },
     ReleaseAll,
     Ping,
     ClientReady,
     ServerReady,
     ServerReadyWithLayoutSync,
+    ServerReadyWithClipboardSync,
+    ServerReadyWithLayoutAndClipboardSync,
     KeyboardLayout(String),
+    ClipboardStart {
+        origin: ClipboardOrigin,
+        transfer_id: u64,
+        total_bytes: u32,
+        chunk_count: u16,
+    },
+    ClipboardChunk {
+        origin: ClipboardOrigin,
+        transfer_id: u64,
+        index: u16,
+        bytes: Vec<u8>,
+    },
+    ClipboardEnd {
+        origin: ClipboardOrigin,
+        transfer_id: u64,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -53,12 +99,48 @@ impl Packet {
             Self::ClientReady => vec![4],
             Self::ServerReady => vec![5],
             Self::ServerReadyWithLayoutSync => vec![6],
+            Self::ServerReadyWithClipboardSync => vec![11],
+            Self::ServerReadyWithLayoutAndClipboardSync => vec![12],
             Self::KeyboardLayout(identifier) => {
                 let bytes = identifier.as_bytes();
                 debug_assert!((1..=128).contains(&bytes.len()));
                 let mut encoded = Vec::with_capacity(bytes.len() + 2);
                 encoded.extend([7, bytes.len() as u8]);
                 encoded.extend(bytes);
+                encoded
+            }
+            Self::ClipboardStart {
+                origin,
+                transfer_id,
+                total_bytes,
+                chunk_count,
+            } => {
+                debug_assert!(valid_clipboard_start(*total_bytes, *chunk_count));
+                let mut encoded = vec![8, origin.encode()];
+                encoded.extend(transfer_id.to_be_bytes());
+                encoded.extend(total_bytes.to_be_bytes());
+                encoded.extend(chunk_count.to_be_bytes());
+                encoded
+            }
+            Self::ClipboardChunk {
+                origin,
+                transfer_id,
+                index,
+                bytes,
+            } => {
+                debug_assert!(!bytes.is_empty() && bytes.len() <= MAX_CLIPBOARD_CHUNK_BYTES);
+                let mut encoded = vec![9, origin.encode()];
+                encoded.extend(transfer_id.to_be_bytes());
+                encoded.extend(index.to_be_bytes());
+                encoded.extend(bytes);
+                encoded
+            }
+            Self::ClipboardEnd {
+                origin,
+                transfer_id,
+            } => {
+                let mut encoded = vec![10, origin.encode()];
+                encoded.extend(transfer_id.to_be_bytes());
                 encoded
             }
         }
@@ -75,6 +157,8 @@ impl Packet {
             [4] => Ok(Self::ClientReady),
             [5] => Ok(Self::ServerReady),
             [6] => Ok(Self::ServerReadyWithLayoutSync),
+            [11] => Ok(Self::ServerReadyWithClipboardSync),
+            [12] => Ok(Self::ServerReadyWithLayoutAndClipboardSync),
             [7, length, identifier @ ..]
                 if (1..=128).contains(length)
                     && identifier.len() == usize::from(*length)
@@ -87,9 +171,79 @@ impl Packet {
                         .map_err(|_| BridgeError::InvalidPacket)?,
                 ))
             }
+            [8, origin, transfer @ ..] if transfer.len() == 14 => {
+                let origin = ClipboardOrigin::decode(*origin)?;
+                let transfer_id = u64::from_be_bytes(
+                    transfer[..8]
+                        .try_into()
+                        .map_err(|_| BridgeError::InvalidPacket)?,
+                );
+                let total_bytes = u32::from_be_bytes(
+                    transfer[8..12]
+                        .try_into()
+                        .map_err(|_| BridgeError::InvalidPacket)?,
+                );
+                let chunk_count = u16::from_be_bytes(
+                    transfer[12..14]
+                        .try_into()
+                        .map_err(|_| BridgeError::InvalidPacket)?,
+                );
+                if !valid_clipboard_start(total_bytes, chunk_count) {
+                    return Err(BridgeError::InvalidPacket);
+                }
+                Ok(Self::ClipboardStart {
+                    origin,
+                    transfer_id,
+                    total_bytes,
+                    chunk_count,
+                })
+            }
+            [9, origin, transfer_id @ ..] if transfer_id.len() >= 11 => {
+                let origin = ClipboardOrigin::decode(*origin)?;
+                let id = u64::from_be_bytes(
+                    transfer_id[..8]
+                        .try_into()
+                        .map_err(|_| BridgeError::InvalidPacket)?,
+                );
+                let index = u16::from_be_bytes(
+                    transfer_id[8..10]
+                        .try_into()
+                        .map_err(|_| BridgeError::InvalidPacket)?,
+                );
+                let bytes = transfer_id[10..].to_vec();
+                if bytes.is_empty() || bytes.len() > MAX_CLIPBOARD_CHUNK_BYTES {
+                    return Err(BridgeError::InvalidPacket);
+                }
+                Ok(Self::ClipboardChunk {
+                    origin,
+                    transfer_id: id,
+                    index,
+                    bytes,
+                })
+            }
+            [10, origin, transfer_id @ ..] if transfer_id.len() == 8 => Ok(Self::ClipboardEnd {
+                origin: ClipboardOrigin::decode(*origin)?,
+                transfer_id: u64::from_be_bytes(
+                    transfer_id
+                        .try_into()
+                        .map_err(|_| BridgeError::InvalidPacket)?,
+                ),
+            }),
             _ => Err(BridgeError::InvalidPacket),
         }
     }
+}
+
+fn valid_clipboard_start(total_bytes: u32, chunk_count: u16) -> bool {
+    if total_bytes as usize > MAX_CLIPBOARD_TEXT_BYTES {
+        return false;
+    }
+    let expected = if total_bytes == 0 {
+        0
+    } else {
+        (total_bytes as usize).div_ceil(MAX_CLIPBOARD_CHUNK_BYTES)
+    };
+    usize::from(chunk_count) == expected
 }
 
 #[derive(Clone)]
@@ -315,6 +469,31 @@ mod tests {
         assert_eq!(Packet::decode(&packet.encode()).unwrap(), packet);
         assert!(matches!(
             Packet::decode(&[7, 2, b'u', b' ']),
+            Err(BridgeError::InvalidPacket)
+        ));
+    }
+
+    #[test]
+    fn clipboard_packets_preserve_direction_and_reject_malformed_bounds() {
+        let packet = Packet::ClipboardStart {
+            origin: ClipboardOrigin::Mac,
+            transfer_id: 42,
+            total_bytes: MAX_CLIPBOARD_CHUNK_BYTES as u32 + 1,
+            chunk_count: 2,
+        };
+        assert_eq!(Packet::decode(&packet.encode()).unwrap(), packet);
+        assert!(matches!(
+            Packet::decode(&[8, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1]),
+            Err(BridgeError::InvalidPacket)
+        ));
+        let oversized_chunk = [
+            vec![9, 1],
+            vec![0; 10],
+            vec![0; MAX_CLIPBOARD_CHUNK_BYTES + 1],
+        ]
+        .concat();
+        assert!(matches!(
+            Packet::decode(&oversized_chunk),
             Err(BridgeError::InvalidPacket)
         ));
     }

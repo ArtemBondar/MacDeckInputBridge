@@ -1,7 +1,21 @@
 import CryptoKit
 import Foundation
 
+/// Identifies the creator of a clipboard transfer. The current release accepts
+/// only `.mac` transfers; keeping the direction in the encrypted packet model
+/// makes a future Deck-to-Mac feature explicit and prevents echo-prone
+/// inference from connection direction.
+public enum ClipboardOrigin: UInt8, Equatable, Sendable {
+    case mac = 1
+    case steamDeck = 2
+}
+
 public enum BridgePacket: Equatable, Sendable {
+    public static let maximumClipboardTextBytes = 65_536
+    /// Intentionally below the encrypted frame limit after packet, sequence,
+    /// nonce, and authentication-tag overhead are included.
+    public static let maximumClipboardChunkBytes = 3_840
+
     case key(code: UInt16, value: UInt8)
     case releaseAll
     case ping
@@ -9,7 +23,14 @@ public enum BridgePacket: Equatable, Sendable {
     case serverReady
     /// The receiver has opted into layout synchronization for this session.
     case serverReadyWithLayoutSync
+    /// The receiver has opted into receiving Mac-origin plain-text clipboard transfers.
+    case serverReadyWithClipboardSync
+    /// The receiver has opted into both currently supported optional features.
+    case serverReadyWithLayoutAndClipboardSync
     case keyboardLayout(identifier: String)
+    case clipboardStart(origin: ClipboardOrigin, transferID: UInt64, totalBytes: UInt32, chunkCount: UInt16)
+    case clipboardChunk(origin: ClipboardOrigin, transferID: UInt64, index: UInt16, bytes: Data)
+    case clipboardEnd(origin: ClipboardOrigin, transferID: UInt64)
 
     public func encoded() -> Data {
         switch self {
@@ -19,10 +40,30 @@ public enum BridgePacket: Equatable, Sendable {
         case .clientReady: return Data([4])
         case .serverReady: return Data([5])
         case .serverReadyWithLayoutSync: return Data([6])
+        case .serverReadyWithClipboardSync: return Data([11])
+        case .serverReadyWithLayoutAndClipboardSync: return Data([12])
         case let .keyboardLayout(identifier):
             let identifierBytes = Array(identifier.utf8)
             precondition((1...128).contains(identifierBytes.count))
             return Data([7, UInt8(identifierBytes.count)] + identifierBytes)
+        case let .clipboardStart(origin, transferID, totalBytes, chunkCount):
+            precondition(Self.isValidClipboardStart(totalBytes: totalBytes, chunkCount: chunkCount))
+            var result = Data([8, origin.rawValue])
+            result.appendInteger(transferID)
+            result.appendInteger(totalBytes)
+            result.appendInteger(chunkCount)
+            return result
+        case let .clipboardChunk(origin, transferID, index, bytes):
+            precondition(!bytes.isEmpty && bytes.count <= Self.maximumClipboardChunkBytes)
+            var result = Data([9, origin.rawValue])
+            result.appendInteger(transferID)
+            result.appendInteger(index)
+            result.append(bytes)
+            return result
+        case let .clipboardEnd(origin, transferID):
+            var result = Data([10, origin.rawValue])
+            result.appendInteger(transferID)
+            return result
         }
     }
 
@@ -35,18 +76,92 @@ public enum BridgePacket: Equatable, Sendable {
         } else if bytes == [4] { self = .clientReady
         } else if bytes == [5] { self = .serverReady
         } else if bytes == [6] { self = .serverReadyWithLayoutSync
+        } else if bytes == [11] { self = .serverReadyWithClipboardSync
+        } else if bytes == [12] { self = .serverReadyWithLayoutAndClipboardSync
         } else if bytes.count >= 3, bytes[0] == 7, bytes[1] <= 128,
                   bytes.count == 2 + Int(bytes[1]),
                   let identifier = String(bytes: bytes.dropFirst(2), encoding: .utf8),
                   Self.isValidKeyboardLayoutIdentifier(identifier) {
             self = .keyboardLayout(identifier: identifier)
+        } else if bytes.count == 16, bytes[0] == 8,
+                  let origin = ClipboardOrigin(rawValue: bytes[1]),
+                  let transferID = Self.integer(bytes, offset: 2, as: UInt64.self),
+                  let totalBytes = Self.integer(bytes, offset: 10, as: UInt32.self),
+                  let chunkCount = Self.integer(bytes, offset: 14, as: UInt16.self),
+                  Self.isValidClipboardStart(totalBytes: totalBytes, chunkCount: chunkCount) {
+            self = .clipboardStart(
+                origin: origin,
+                transferID: transferID,
+                totalBytes: totalBytes,
+                chunkCount: chunkCount
+            )
+        } else if bytes.count >= 13, bytes[0] == 9,
+                  let origin = ClipboardOrigin(rawValue: bytes[1]),
+                  let transferID = Self.integer(bytes, offset: 2, as: UInt64.self),
+                  let index = Self.integer(bytes, offset: 10, as: UInt16.self) {
+            let chunk = Data(bytes.dropFirst(12))
+            guard !chunk.isEmpty && chunk.count <= Self.maximumClipboardChunkBytes else { return nil }
+            self = .clipboardChunk(origin: origin, transferID: transferID, index: index, bytes: chunk)
+        } else if bytes.count == 10, bytes[0] == 10,
+                  let origin = ClipboardOrigin(rawValue: bytes[1]),
+                  let transferID = Self.integer(bytes, offset: 2, as: UInt64.self) {
+            self = .clipboardEnd(origin: origin, transferID: transferID)
         } else { return nil }
+    }
+
+    public static func clipboardPackets(origin: ClipboardOrigin, transferID: UInt64, text: String) -> [BridgePacket]? {
+        let bytes = Data(text.utf8)
+        guard bytes.count <= maximumClipboardTextBytes,
+              let totalBytes = UInt32(exactly: bytes.count) else { return nil }
+        let chunks = bytes.chunked(maximumLength: maximumClipboardChunkBytes)
+        guard let chunkCount = UInt16(exactly: chunks.count) else { return nil }
+        var packets: [BridgePacket] = [
+            .clipboardStart(origin: origin, transferID: transferID, totalBytes: totalBytes, chunkCount: chunkCount)
+        ]
+        packets.reserveCapacity(chunks.count + 2)
+        for (index, chunk) in chunks.enumerated() {
+            guard let packetIndex = UInt16(exactly: index) else { return nil }
+            packets.append(.clipboardChunk(origin: origin, transferID: transferID, index: packetIndex, bytes: chunk))
+        }
+        packets.append(.clipboardEnd(origin: origin, transferID: transferID))
+        return packets
     }
 
     private static func isValidKeyboardLayoutIdentifier(_ identifier: String) -> Bool {
         !identifier.isEmpty && identifier.utf8.allSatisfy { byte in
             (48...57).contains(byte) || (65...90).contains(byte) ||
                 (97...122).contains(byte) || byte == 45 || byte == 46 || byte == 95
+        }
+    }
+
+    private static func isValidClipboardStart(totalBytes: UInt32, chunkCount: UInt16) -> Bool {
+        guard totalBytes <= UInt32(maximumClipboardTextBytes) else { return false }
+        let expected = totalBytes == 0
+            ? 0
+            : (Int(totalBytes) + maximumClipboardChunkBytes - 1) / maximumClipboardChunkBytes
+        return Int(chunkCount) == expected
+    }
+
+    private static func integer<T: FixedWidthInteger>(
+        _ bytes: [UInt8], offset: Int, as: T.Type
+    ) -> T? {
+        let end = offset + MemoryLayout<T>.size
+        guard end <= bytes.count else { return nil }
+        return bytes[offset..<end].reduce(T.zero) { ($0 << 8) | T($1) }
+    }
+}
+
+private extension Data {
+    mutating func appendInteger<T: FixedWidthInteger>(_ value: T) {
+        var bigEndian = value.bigEndian
+        append(Data(bytes: &bigEndian, count: MemoryLayout<T>.size))
+    }
+
+    func chunked(maximumLength: Int) -> [Data] {
+        guard !isEmpty else { return [] }
+        return stride(from: startIndex, to: endIndex, by: maximumLength).map { start in
+            let end = index(start, offsetBy: maximumLength, limitedBy: endIndex) ?? endIndex
+            return Data(self[start..<end])
         }
     }
 }

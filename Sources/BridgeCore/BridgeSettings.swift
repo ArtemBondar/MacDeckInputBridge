@@ -4,10 +4,14 @@ import Security
 public struct BridgeSettings: Equatable, Sendable {
     public var host: String
     public var port: UInt16
+    /// Explicitly opt in to Mac → Steam Deck plain-text clipboard transfers.
+    /// Clipboard contents themselves are never persisted.
+    public var syncClipboardFromMac: Bool
 
-    public init(host: String, port: UInt16 = 4242) {
+    public init(host: String, port: UInt16 = 4242, syncClipboardFromMac: Bool = false) {
         self.host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         self.port = port
+        self.syncClipboardFromMac = syncClipboardFromMac
     }
 
     public func validated() throws -> BridgeSettings {
@@ -184,6 +188,7 @@ public final class BridgeSettingsStore {
     private enum Key {
         static let host = "deckHost"
         static let port = "deckPort"
+        static let syncClipboardFromMac = "syncClipboardFromMac"
         static let allowLocalSecretFallback = "allowLocalSecretFallback"
     }
     private let defaults: UserDefaults
@@ -203,13 +208,18 @@ public final class BridgeSettingsStore {
     public func loadSettings() -> BridgeSettings {
         let storedPort = defaults.integer(forKey: Key.port)
         let port = (1...Int(UInt16.max)).contains(storedPort) ? UInt16(storedPort) : 4242
-        return BridgeSettings(host: defaults.string(forKey: Key.host) ?? "", port: port)
+        return BridgeSettings(
+            host: defaults.string(forKey: Key.host) ?? "",
+            port: port,
+            syncClipboardFromMac: defaults.bool(forKey: Key.syncClipboardFromMac)
+        )
     }
 
     public func saveSettings(_ settings: BridgeSettings) throws {
         let validated = try settings.validated()
         defaults.set(validated.host, forKey: Key.host)
         defaults.set(Int(validated.port), forKey: Key.port)
+        defaults.set(validated.syncClipboardFromMac, forKey: Key.syncClipboardFromMac)
     }
 
     public var allowsLocalSecretFallback: Bool {
