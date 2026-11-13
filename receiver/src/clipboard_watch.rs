@@ -22,6 +22,11 @@ use mac_deck_receiver::MAX_CLIPBOARD_TEXT_BYTES;
 static MANUAL_READ_ACTIVE: AtomicBool = AtomicBool::new(false);
 static WATCH_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+// Bound how long a clipboard owner can hold a transfer open. Polling makes
+// cancellation responsive without busy-waiting while the owner produces data.
+const CLIPBOARD_READ_TIMEOUT: Duration = Duration::from_secs(2);
+const CLIPBOARD_CANCEL_POLL_INTERVAL_MS: libc::c_int = 100;
+
 struct WatchPermit;
 impl Drop for WatchPermit {
     fn drop(&mut self) {
@@ -170,7 +175,7 @@ fn read_bounded(reader: &mut impl ReadFd, stop: &AtomicBool) -> Option<String> {
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return None;
     }
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + CLIPBOARD_READ_TIMEOUT;
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 4096];
     loop {
@@ -191,7 +196,7 @@ fn read_bounded(reader: &mut impl ReadFd, stop: &AtomicBool) -> Option<String> {
                     events: libc::POLLIN,
                     revents: 0,
                 };
-                if unsafe { libc::poll(&mut pollfd, 1, 100) } < 0 {
+                if unsafe { libc::poll(&mut pollfd, 1, CLIPBOARD_CANCEL_POLL_INTERVAL_MS) } < 0 {
                     return None;
                 }
             }
@@ -213,7 +218,33 @@ impl<T: Read + AsRawFd> ReadFd for T {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{io::Write, os::unix::net::UnixStream};
+    use std::{io::Write, os::unix::net::UnixStream, sync::mpsc};
+
+    struct SignalBlockedRead {
+        stream: UnixStream,
+        blocked: Option<mpsc::Sender<()>>,
+    }
+
+    impl Read for SignalBlockedRead {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let result = self.stream.read(buffer);
+            if result
+                .as_ref()
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+            {
+                if let Some(blocked) = self.blocked.take() {
+                    let _ = blocked.send(());
+                }
+            }
+            result
+        }
+    }
+
+    impl AsRawFd for SignalBlockedRead {
+        fn as_raw_fd(&self) -> i32 {
+            self.stream.as_raw_fd()
+        }
+    }
 
     #[test]
     fn reads_text_and_rejects_oversized_or_invalid_utf8() {
@@ -232,8 +263,34 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_stops_read_even_when_owner_keeps_pipe_open() {
+    fn cancellation_stops_an_active_read_when_owner_keeps_pipe_open() {
+        let (stream, _writer) = UnixStream::pair().unwrap();
+        let (blocked_tx, blocked_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = thread::spawn(move || {
+            let mut reader = SignalBlockedRead {
+                stream,
+                blocked: Some(blocked_tx),
+            };
+            let _ = finished_tx.send(read_bounded(&mut reader, &worker_stop));
+        });
+        blocked_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        stop.store(true, Ordering::Release);
+        assert_eq!(
+            finished_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            None
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn stalled_clipboard_owner_hits_read_deadline() {
         let (mut reader, _writer) = UnixStream::pair().unwrap();
-        assert_eq!(read_bounded(&mut reader, &AtomicBool::new(true)), None);
+        let started = Instant::now();
+        assert_eq!(read_bounded(&mut reader, &AtomicBool::new(false)), None);
+        assert!(started.elapsed() >= CLIPBOARD_READ_TIMEOUT);
+        assert!(started.elapsed() < CLIPBOARD_READ_TIMEOUT + Duration::from_secs(3));
     }
 }
