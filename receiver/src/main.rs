@@ -870,34 +870,45 @@ fn read_kxkbrc_layout_list() -> Option<Vec<String>> {
 }
 
 fn read_xkb_layout_descriptions() -> BTreeMap<String, String> {
-    let rules_files = [
-        "/usr/share/X11/xkb/rules/base.lst",
-        "/usr/share/X11/xkb/rules/evdev.lst",
-    ];
-    for rules_file in rules_files {
-        let Ok(contents) = std::fs::read_to_string(rules_file) else {
-            continue;
-        };
-        let mut descriptions = BTreeMap::new();
-        let mut in_layout_section = false;
-        for line in contents.lines() {
-            let line = line.trim();
-            if line.starts_with('!') {
-                in_layout_section = line == "! layout";
-                continue;
-            }
-            if !in_layout_section || line.is_empty() {
-                continue;
-            }
-            let mut fields = line.split_whitespace();
-            let Some(code) = fields.next() else { continue };
-            let description = fields.collect::<Vec<_>>().join(" ");
-            if !description.is_empty() {
-                descriptions.insert(code.to_owned(), description);
-            }
+    let mut directories = Vec::new();
+    if let Some(directory) = env::var_os("MAC_DECK_XKB_RULES_DIR") {
+        let directory = PathBuf::from(directory);
+        // A launcher can have a different working directory from a terminal.
+        if directory.is_absolute() {
+            directories.push(directory);
         }
-        if !descriptions.is_empty() {
-            return descriptions;
+    }
+    directories.push(PathBuf::from("/usr/share/X11/xkb/rules"));
+    read_xkb_layout_descriptions_from(&directories)
+}
+
+fn read_xkb_layout_descriptions_from(directories: &[PathBuf]) -> BTreeMap<String, String> {
+    for directory in directories {
+        for name in ["base.lst", "evdev.lst"] {
+            let Ok(contents) = std::fs::read_to_string(directory.join(name)) else {
+                continue;
+            };
+            let mut descriptions = BTreeMap::new();
+            let mut in_layout_section = false;
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.starts_with('!') {
+                    in_layout_section = line == "! layout";
+                    continue;
+                }
+                if !in_layout_section || line.is_empty() {
+                    continue;
+                }
+                let mut fields = line.split_whitespace();
+                let Some(code) = fields.next() else { continue };
+                let description = fields.collect::<Vec<_>>().join(" ");
+                if !description.is_empty() {
+                    descriptions.insert(code.to_owned(), description);
+                }
+            }
+            if !descriptions.is_empty() {
+                return descriptions;
+            }
         }
     }
     BTreeMap::new()
@@ -1781,6 +1792,40 @@ mod receiver_tests {
             automatic_layout_index("com.apple.keylayout.Ukrainian", &layouts),
             Some(1)
         );
+    }
+
+    #[test]
+    fn xkb_rules_fall_back_to_the_next_usable_file_and_directory() {
+        let directory = std::env::temp_dir().join(format!(
+            "macdeck-xkb-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let missing = directory.join("missing");
+        let custom = directory.join("custom");
+        let fallback = directory.join("fallback");
+        std::fs::create_dir_all(&custom).unwrap();
+        std::fs::create_dir_all(&fallback).unwrap();
+        std::fs::write(custom.join("base.lst"), "! model\n  pc105 Generic\n").unwrap();
+        std::fs::write(
+            custom.join("evdev.lst"),
+            "! layout\n  ua Ukrainian\n! variant\n  custom Ignore\n",
+        )
+        .unwrap();
+        std::fs::write(fallback.join("base.lst"), "! layout\n  us English (US)\n").unwrap();
+        assert_eq!(
+            read_xkb_layout_descriptions_from(&[missing.clone(), custom.clone(), fallback.clone()]),
+            BTreeMap::from([("ua".to_owned(), "Ukrainian".to_owned())]),
+        );
+        assert_eq!(
+            read_xkb_layout_descriptions_from(&[missing.clone(), fallback]),
+            BTreeMap::from([("us".to_owned(), "English (US)".to_owned())]),
+        );
+        assert!(read_xkb_layout_descriptions_from(&[missing]).is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
