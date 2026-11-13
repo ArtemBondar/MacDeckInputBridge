@@ -23,6 +23,8 @@ use wl_clipboard_rs::copy::{MimeType, Options as ClipboardOptions, Source as Cli
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(200);
+// Once a frame starts, do not let a stalled or trickling peer hold keys forever.
+const SESSION_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PENDING_HANDSHAKES: usize = 4;
 
 #[derive(Parser)]
@@ -264,6 +266,61 @@ fn complete_pending_handshake(
     result
 }
 
+// An idle session can wait indefinitely, but a started frame has a bounded
+// assembly time. Polling during a partial frame still observes shutdown.
+struct SessionFrameReader<'a> {
+    stream: &'a mut TcpStream,
+    shutdown: &'a AtomicBool,
+    deadline: Option<Instant>,
+    timeout: Duration,
+    bytes_read: usize,
+}
+
+impl Read for SessionFrameReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if self.shutdown.load(Ordering::Acquire) {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "receiver shutting down",
+                ));
+            }
+            let wait = if let Some(deadline) = self.deadline {
+                deadline
+                    .checked_duration_since(Instant::now())
+                    .filter(|remaining| !remaining.is_zero())
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::TimedOut, "incomplete frame timed out")
+                    })?
+                    .min(SESSION_POLL_INTERVAL)
+            } else {
+                SESSION_POLL_INTERVAL
+            };
+            self.stream.set_read_timeout(Some(wait))?;
+            match self.stream.read(buffer) {
+                Ok(count) => {
+                    if count > 0 {
+                        self.bytes_read += count;
+                        self.deadline
+                            .get_or_insert_with(|| Instant::now() + self.timeout);
+                    }
+                    return Ok(count);
+                }
+                Err(error)
+                    if self.deadline.is_some()
+                        && matches!(
+                            error.kind(),
+                            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                        ) =>
+                {
+                    continue
+                }
+                result => return result,
+            }
+        }
+    }
+}
+
 fn handle_authenticated_client(
     stream: &mut TcpStream,
     session: &SessionFramer,
@@ -272,10 +329,7 @@ fn handle_authenticated_client(
     layout_switcher: Option<&PlasmaLayoutSwitcher>,
     clipboard_sink: Option<&mut dyn ClipboardSink>,
 ) -> Result<(), BridgeError> {
-    // A bounded timeout makes shutdown deterministic without treating an idle
-    // keyboard as a failed session. If a partial frame spans the timeout, the
-    // connection is rejected safely by framing/authentication on its next read.
-    stream.set_read_timeout(Some(SESSION_POLL_INTERVAL))?;
+    // Idle reads poll for shutdown; partial frames use a separate total deadline.
     stream.set_write_timeout(None)?;
     let mut next_sequence = 1u64;
     let mut clipboard_transfer: Option<ClipboardTransfer> = None;
@@ -284,13 +338,21 @@ fn handle_authenticated_client(
         if shutdown.load(Ordering::Acquire) {
             return Ok(());
         }
-        let (sequence, packet) = match session.read_packet(stream) {
+        let mut frame = SessionFrameReader {
+            stream,
+            shutdown,
+            deadline: None,
+            timeout: SESSION_FRAME_TIMEOUT,
+            bytes_read: 0,
+        };
+        let (sequence, packet) = match session.read_packet(&mut frame) {
             Ok(packet) => packet,
             Err(BridgeError::Io(error))
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                ) =>
+                if frame.bytes_read == 0
+                    && matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
             {
                 continue;
             }
@@ -1393,6 +1455,91 @@ mod receiver_tests {
             expect_next_sequence(&mut expected, 3),
             Err(BridgeError::Handshake)
         ));
+    }
+
+    #[test]
+    fn partial_session_frame_times_out_without_becoming_an_idle_read() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let shutdown = AtomicBool::new(false);
+            let mut reader = SessionFrameReader {
+                stream: &mut stream,
+                shutdown: &shutdown,
+                deadline: None,
+                timeout: Duration::from_millis(200),
+                bytes_read: 0,
+            };
+            let mut data = [0; 4];
+            let error = reader.read_exact(&mut data).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            assert_eq!(reader.bytes_read, 1);
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        client.write_all(&[0]).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn partial_frame_failure_releases_an_held_key() {
+        let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_pairing = pairing.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let session = SessionFramer::new(server_pairing);
+            let mut sink = TestSink::default();
+            let shutdown = AtomicBool::new(false);
+            let result = handle_authenticated_client(
+                &mut stream,
+                &session,
+                &mut sink,
+                &shutdown,
+                None,
+                None,
+            );
+            assert!(
+                matches!(result, Err(BridgeError::Io(error)) if error.kind() == io::ErrorKind::TimedOut)
+            );
+            assert!(sink.held.contains(&30));
+            // Match the receiver worker's disconnect cleanup.
+            sink.release_all().unwrap();
+            assert!(sink.held.is_empty());
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        let session = SessionFramer::new(pairing);
+        session
+            .write_packet(&mut client, 1, &Packet::Key { code: 30, value: 1 })
+            .unwrap();
+        client.write_all(&[0]).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn idle_session_read_remains_distinct_from_a_partial_frame() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let shutdown = AtomicBool::new(false);
+            let mut reader = SessionFrameReader {
+                stream: &mut stream,
+                shutdown: &shutdown,
+                deadline: None,
+                timeout: SESSION_FRAME_TIMEOUT,
+                bytes_read: 0,
+            };
+            let error = reader.read(&mut [0; 4]).unwrap_err();
+            assert!(matches!(
+                error.kind(),
+                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+            ));
+            assert_eq!(reader.bytes_read, 0);
+        });
+        let _client = TcpStream::connect(address).unwrap();
+        server.join().unwrap();
     }
 
     #[test]
