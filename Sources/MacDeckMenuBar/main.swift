@@ -294,7 +294,7 @@ private struct MenuContentView: View {
         Text("Shortcut: ⌃⇧F12")
             .font(.caption)
             .foregroundStyle(.primary.opacity(0.78))
-        if model.status == .remote, model.syncClipboardFromMac {
+        if model.status == .remote {
             Button("Send Mac clipboard now") {
                 model.sendCurrentClipboard()
             }
