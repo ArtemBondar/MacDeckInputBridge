@@ -245,10 +245,23 @@ fn receive_client_ready_before(
     write_server_hello(&mut handshake, &challenge)?;
     let session = SessionFramer::new(derive_session_secret(pairing_secret, &challenge));
     let (sequence, packet) = session.read_packet(&mut handshake)?;
+    handshake.remaining()?;
     if sequence != 0 || packet != Packet::ClientReady {
         return Err(BridgeError::Handshake);
     }
     Ok(session)
+}
+
+// A pending slot protects only the unauthenticated phase, not the lifetime of
+// an accepted session. Release it on both success and failure.
+fn complete_pending_handshake(
+    stream: &mut TcpStream,
+    pairing_secret: &PairingSecret,
+    pending_handshakes: &AtomicUsize,
+) -> Result<SessionFramer, BridgeError> {
+    let result = receive_client_ready(stream, pairing_secret);
+    pending_handshakes.fetch_sub(1, Ordering::AcqRel);
+    result
 }
 
 fn handle_authenticated_client(
@@ -1119,7 +1132,11 @@ fn serve(
                 let shutdown = Arc::clone(&shutdown);
                 let layout_switcher = layout_switcher.clone();
                 workers.push(thread::spawn(move || {
-                    let session = receive_client_ready(&mut stream, &pairing_secret);
+                    let session = complete_pending_handshake(
+                        &mut stream,
+                        &pairing_secret,
+                        &pending_handshakes,
+                    );
                     if let Ok(session) = session {
                         // A receiver has exactly one uinput keyboard. Do not confirm
                         // REMOTE for a second peer while a first peer owns it.
@@ -1165,7 +1182,6 @@ fn serve(
                         }
                     }
                     let _ = stream.shutdown(Shutdown::Both);
-                    pending_handshakes.fetch_sub(1, Ordering::AcqRel);
                 }));
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -1314,6 +1330,45 @@ mod receiver_tests {
             expect_next_sequence(&mut expected, 3),
             Err(BridgeError::Handshake)
         ));
+    }
+
+    #[test]
+    fn pending_handshake_slot_released_before_session_ends_and_on_failure() {
+        let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+        for should_authenticate in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let pending = Arc::new(AtomicUsize::new(1));
+            let pending_server = Arc::clone(&pending);
+            let server_pairing = pairing.clone();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let result =
+                    complete_pending_handshake(&mut stream, &server_pairing, &pending_server);
+                assert_eq!(result.is_ok(), should_authenticate);
+                assert_eq!(pending_server.load(Ordering::Acquire), 0);
+                // Keep an authenticated connection open after its slot is released.
+                if should_authenticate {
+                    let mut signal = [0];
+                    stream.read_exact(&mut signal).unwrap();
+                }
+            });
+            let mut client = TcpStream::connect(address).unwrap();
+            let challenge = mac_deck_receiver::read_server_hello(&mut client).unwrap();
+            let session = SessionFramer::new(derive_session_secret(&pairing, &challenge));
+            let packet = if should_authenticate {
+                Packet::ClientReady
+            } else {
+                Packet::Ping
+            };
+            session.write_packet(&mut client, 0, &packet).unwrap();
+            if should_authenticate {
+                // This byte cannot be read until the server releases its slot.
+                client.write_all(&[1]).unwrap();
+            }
+            server.join().unwrap();
+            assert_eq!(pending.load(Ordering::Acquire), 0);
+        }
     }
 
     #[test]
