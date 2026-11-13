@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     env,
     ffi::CString,
-    io,
+    io::{self, Read, Write},
     net::{Shutdown, TcpListener, TcpStream},
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
@@ -17,7 +17,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use wl_clipboard_rs::copy::{MimeType, Options as ClipboardOptions, Source as ClipboardSource};
 
@@ -190,16 +190,61 @@ fn handle_client(
     handle_authenticated_client(stream, &session, sink, &shutdown, None, None)
 }
 
+// Apply a single deadline to the entire handshake, including partial reads and
+// writes. Per-operation socket timeouts alone restart when a peer trickles data.
+struct HandshakeStream<'a> {
+    stream: &'a mut TcpStream,
+    deadline: Instant,
+}
+
+impl HandshakeStream<'_> {
+    fn remaining(&self) -> io::Result<Duration> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "handshake timed out"))
+    }
+}
+
+impl Read for HandshakeStream<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.stream.set_read_timeout(Some(self.remaining()?))?;
+        self.stream.read(buf)
+    }
+}
+
+impl Write for HandshakeStream<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.stream.set_write_timeout(Some(self.remaining()?))?;
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.remaining()?;
+        self.stream.flush()
+    }
+}
+
 fn receive_client_ready(
     stream: &mut TcpStream,
     pairing_secret: &PairingSecret,
 ) -> Result<SessionFramer, BridgeError> {
-    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
-    stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
+    receive_client_ready_before(stream, pairing_secret, HANDSHAKE_TIMEOUT)
+}
+
+fn receive_client_ready_before(
+    stream: &mut TcpStream,
+    pairing_secret: &PairingSecret,
+    timeout: Duration,
+) -> Result<SessionFramer, BridgeError> {
+    let mut handshake = HandshakeStream {
+        stream,
+        deadline: Instant::now() + timeout,
+    };
     let challenge = generate_challenge();
-    write_server_hello(stream, &challenge)?;
+    write_server_hello(&mut handshake, &challenge)?;
     let session = SessionFramer::new(derive_session_secret(pairing_secret, &challenge));
-    let (sequence, packet) = session.read_packet(stream)?;
+    let (sequence, packet) = session.read_packet(&mut handshake)?;
     if sequence != 0 || packet != Packet::ClientReady {
         return Err(BridgeError::Handshake);
     }
@@ -1269,6 +1314,39 @@ mod receiver_tests {
             expect_next_sequence(&mut expected, 3),
             Err(BridgeError::Handshake)
         ));
+    }
+
+    #[test]
+    fn handshake_deadline_cannot_be_extended_by_partial_data() {
+        use std::sync::mpsc;
+        let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let result =
+                receive_client_ready_before(&mut stream, &pairing, Duration::from_millis(200));
+            done_tx.send(result.is_err()).unwrap();
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        mac_deck_receiver::read_server_hello(&mut client).unwrap();
+        // Advertise a large frame and repeatedly write partial payload bytes;
+        // each arrives within the per-read timeout, but the total exceeds it.
+        client.write_all(&4096u32.to_be_bytes()).unwrap();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            while stop_rx.recv_timeout(Duration::from_millis(20)).is_err() {
+                if client.write_all(&[0]).is_err() {
+                    break;
+                }
+            }
+        });
+        let completed = done_rx.recv_timeout(Duration::from_secs(2));
+        let _ = stop_tx.send(());
+        writer.join().unwrap();
+        server.join().unwrap();
+        assert!(completed.unwrap());
     }
 
     #[test]
