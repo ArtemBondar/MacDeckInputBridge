@@ -119,6 +119,21 @@ private final class MenuBarModel: ObservableObject {
         }
     }
 
+    func sendCurrentClipboard() {
+        message = switch sender.sendCurrentClipboard() {
+        case .sent:
+            "Sending clipboard to Steam Deck…"
+        case .notConnected:
+            "Connect the keyboard to Steam Deck before sharing the clipboard."
+        case .notEnabled:
+            "Enable clipboard sync in both MacDeck Settings screens, then reconnect."
+        case .noPlainText:
+            "The Mac clipboard has no plain text to send."
+        case .tooLarge:
+            "The Mac clipboard text is too large to send (maximum 64 KiB)."
+        }
+    }
+
     /// Settings must always receive the Mac's physical keyboard. If forwarding is
     /// active, tear down the event tap first rather than letting it suppress this
     /// app's own text fields.
@@ -279,6 +294,11 @@ private struct MenuContentView: View {
         Text("Shortcut: ⌃⇧F12")
             .font(.caption)
             .foregroundStyle(.primary.opacity(0.78))
+        if model.status == .remote, model.syncClipboardFromMac {
+            Button("Send Mac clipboard now") {
+                model.sendCurrentClipboard()
+            }
+        }
         Divider()
         Button("Settings…") {
             model.showSettings()
