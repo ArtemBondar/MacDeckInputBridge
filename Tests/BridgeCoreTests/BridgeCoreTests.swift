@@ -542,6 +542,20 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertNil(BridgePacket(encoded: Data([13, ClipboardOrigin.mac.rawValue] + Array(repeating: 0, count: 8) + [99])))
     }
 
+    func testIncomingClipboardTransferRejectsOutOfOrderAndInvalidText() throws {
+        XCTAssertNil(IncomingClipboardTransfer(transferID: 1, totalBytes: 65_537, chunkCount: 18))
+        XCTAssertNil(IncomingClipboardTransfer(transferID: 1, totalBytes: 3, chunkCount: 2))
+        var transfer = try XCTUnwrap(IncomingClipboardTransfer(transferID: 9, totalBytes: 3, chunkCount: 1))
+        XCTAssertFalse(transfer.append(transferID: 8, index: 0, chunk: Data("abc".utf8)))
+        XCTAssertFalse(transfer.append(transferID: 9, index: 1, chunk: Data("abc".utf8)))
+        XCTAssertTrue(transfer.append(transferID: 9, index: 0, chunk: Data("abc".utf8)))
+        XCTAssertNil(transfer.finish(transferID: 8))
+        XCTAssertEqual(transfer.finish(transferID: 9), "abc")
+        var invalid = try XCTUnwrap(IncomingClipboardTransfer(transferID: 1, totalBytes: 1, chunkCount: 1))
+        XCTAssertTrue(invalid.append(transferID: 1, index: 0, chunk: Data([0xff])))
+        XCTAssertNil(invalid.finish(transferID: 1))
+    }
+
     func testClipboardDeliveryAcknowledgementKeepsContentOutOfTheProtocol() {
         let packet = BridgePacket.clipboardDelivery(
             origin: .mac,
@@ -553,6 +567,14 @@ final class BridgeCoreTests: XCTestCase {
             Data([13, ClipboardOrigin.mac.rawValue] + Array(repeating: 0, count: 7) + [42, ClipboardDelivery.written.rawValue])
         )
         XCTAssertEqual(BridgePacket(encoded: packet.encoded()), packet)
+    }
+
+    func testReverseClipboardCapabilityRoundTripsAndRejectsInvalidFlags() {
+        for enabled in [false, true] {
+            let packet = BridgePacket.clipboardCapabilities(deckToMac: enabled)
+            XCTAssertEqual(BridgePacket(encoded: packet.encoded()), packet)
+        }
+        XCTAssertNil(BridgePacket(encoded: Data([14, 2])))
     }
 
     func testClipboardSynchronizationDoesNotSendExistingDataOrAfterCancellation() {
@@ -582,8 +604,10 @@ final class BridgeCoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = BridgeSettingsStore(defaults: defaults, secretStore: InMemoryPairingSecretStore())
         XCTAssertFalse(store.loadSettings().syncClipboardFromMac)
-        try store.saveSettings(BridgeSettings(host: "deck.local", syncClipboardFromMac: true))
+        XCTAssertFalse(store.loadSettings().syncClipboardFromDeck)
+        try store.saveSettings(BridgeSettings(host: "deck.local", syncClipboardFromMac: true, syncClipboardFromDeck: true))
         XCTAssertTrue(store.loadSettings().syncClipboardFromMac)
+        XCTAssertTrue(store.loadSettings().syncClipboardFromDeck)
     }
 }
 

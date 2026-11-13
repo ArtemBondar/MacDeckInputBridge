@@ -7,6 +7,7 @@ public struct SettingsDraft: Equatable {
     public var showInDock: Bool
     public var allowLocalSecretFallback: Bool
     public var syncClipboardFromMac: Bool
+    public var syncClipboardFromDeck: Bool
     public var currentInputSourceID: String?
 
     public init(
@@ -16,6 +17,7 @@ public struct SettingsDraft: Equatable {
         showInDock: Bool = true,
         allowLocalSecretFallback: Bool = false,
         syncClipboardFromMac: Bool = false,
+        syncClipboardFromDeck: Bool = false,
         currentInputSourceID: String? = nil
     ) {
         self.host = host
@@ -24,6 +26,7 @@ public struct SettingsDraft: Equatable {
         self.showInDock = showInDock
         self.allowLocalSecretFallback = allowLocalSecretFallback
         self.syncClipboardFromMac = syncClipboardFromMac
+        self.syncClipboardFromDeck = syncClipboardFromDeck
         self.currentInputSourceID = currentInputSourceID
     }
 }
@@ -48,6 +51,11 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         target: nil,
         action: nil
     )
+    public let syncClipboardFromDeckCheckbox = NSButton(
+        checkboxWithTitle: "Accept plain-text clipboard from Steam Deck",
+        target: nil,
+        action: nil
+    )
     public let currentInputSourceLabel = NSTextField(wrappingLabelWithString: "")
     public let messageLabel = NSTextField(wrappingLabelWithString: "")
     public let saveButton = NSButton(title: "Save", target: nil, action: nil)
@@ -56,7 +64,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     public init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 560),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -83,6 +91,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         showInDockCheckbox.state = draft.showInDock ? .on : .off
         allowLocalSecretFallbackCheckbox.state = draft.allowLocalSecretFallback ? .on : .off
         syncClipboardCheckbox.state = draft.syncClipboardFromMac ? .on : .off
+        syncClipboardFromDeckCheckbox.state = draft.syncClipboardFromDeck ? .on : .off
         currentInputSourceLabel.stringValue = draft.currentInputSourceID ?? "Unavailable"
         messageLabel.stringValue = notice ?? ""
         messageLabel.textColor = isInformationalNotice(notice) ? .secondaryLabelColor : .systemRed
@@ -125,7 +134,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             pairingSecret: pairingSecretField.stringValue,
             showInDock: showInDockCheckbox.state == .on,
             allowLocalSecretFallback: allowLocalSecretFallbackCheckbox.state == .on,
-            syncClipboardFromMac: syncClipboardCheckbox.state == .on
+            syncClipboardFromMac: syncClipboardCheckbox.state == .on,
+            syncClipboardFromDeck: syncClipboardFromDeckCheckbox.state == .on
         )
         if let error = onSave?(draft) {
             messageLabel.stringValue = error
@@ -163,7 +173,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         let guidance = NSTextField(wrappingLabelWithString: "Stored in this Mac’s Keychain. If Keychain access is denied, the optional local fallback is owner-only but less secure. Typed keys are never stored or logged.")
         guidance.textColor = .secondaryLabelColor
         guidance.font = .systemFont(ofSize: 12)
-        let clipboardGuidance = NSTextField(wrappingLabelWithString: "Off by default. Sends only new plain-text clipboard changes while connected; contents are encrypted, never logged or saved, and are not sent back from Steam Deck.")
+        let clipboardGuidance = NSTextField(wrappingLabelWithString: "Clipboard sharing is off by default. New text may contain sensitive information; it is encrypted and is not logged or saved by MacDeck.")
         clipboardGuidance.textColor = .secondaryLabelColor
         clipboardGuidance.font = .systemFont(ofSize: 12)
         clipboardGuidance.maximumNumberOfLines = 2
@@ -204,6 +214,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             guidance,
             allowLocalSecretFallbackCheckbox,
             syncClipboardCheckbox,
+            syncClipboardFromDeckCheckbox,
             clipboardGuidance,
             inputSourceTitle,
             currentInputSourceLabel,

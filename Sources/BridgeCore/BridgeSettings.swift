@@ -7,11 +7,13 @@ public struct BridgeSettings: Equatable, Sendable {
     /// Explicitly opt in to Mac → Steam Deck plain-text clipboard transfers.
     /// Clipboard contents themselves are never persisted.
     public var syncClipboardFromMac: Bool
+    public var syncClipboardFromDeck: Bool
 
-    public init(host: String, port: UInt16 = 4242, syncClipboardFromMac: Bool = false) {
+    public init(host: String, port: UInt16 = 4242, syncClipboardFromMac: Bool = false, syncClipboardFromDeck: Bool = false) {
         self.host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         self.port = port
         self.syncClipboardFromMac = syncClipboardFromMac
+        self.syncClipboardFromDeck = syncClipboardFromDeck
     }
 
     public func validated() throws -> BridgeSettings {
@@ -189,6 +191,7 @@ public final class BridgeSettingsStore {
         static let host = "deckHost"
         static let port = "deckPort"
         static let syncClipboardFromMac = "syncClipboardFromMac"
+        static let syncClipboardFromDeck = "syncClipboardFromDeck"
         static let allowLocalSecretFallback = "allowLocalSecretFallback"
     }
     private let defaults: UserDefaults
@@ -211,7 +214,8 @@ public final class BridgeSettingsStore {
         return BridgeSettings(
             host: defaults.string(forKey: Key.host) ?? "",
             port: port,
-            syncClipboardFromMac: defaults.bool(forKey: Key.syncClipboardFromMac)
+            syncClipboardFromMac: defaults.bool(forKey: Key.syncClipboardFromMac),
+            syncClipboardFromDeck: defaults.bool(forKey: Key.syncClipboardFromDeck)
         )
     }
 
@@ -220,6 +224,7 @@ public final class BridgeSettingsStore {
         defaults.set(validated.host, forKey: Key.host)
         defaults.set(Int(validated.port), forKey: Key.port)
         defaults.set(validated.syncClipboardFromMac, forKey: Key.syncClipboardFromMac)
+        defaults.set(validated.syncClipboardFromDeck, forKey: Key.syncClipboardFromDeck)
     }
 
     public var allowsLocalSecretFallback: Bool {

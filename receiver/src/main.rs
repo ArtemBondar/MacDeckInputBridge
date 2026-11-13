@@ -1,11 +1,13 @@
 use clap::{ArgAction, Parser, Subcommand};
 use mac_deck_receiver::{
     derive_session_secret, generate_challenge, write_server_hello, BridgeError, ClipboardDelivery,
-    ClipboardOrigin, Packet, PairingSecret, SessionFramer, MAX_CLIPBOARD_TEXT_BYTES,
+    ClipboardOrigin, Packet, PairingSecret, SessionFramer, MAX_CLIPBOARD_CHUNK_BYTES,
+    MAX_CLIPBOARD_TEXT_BYTES,
 };
 use std::{
     collections::{BTreeMap, HashMap},
-    env, io,
+    env,
+    io::{self, BufRead},
     net::{Shutdown, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Output, Stdio},
@@ -17,6 +19,7 @@ use std::{
     time::Duration,
 };
 use wl_clipboard_rs::copy::{MimeType, Options as ClipboardOptions, Source as ClipboardSource};
+mod clipboard_watch;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -48,6 +51,11 @@ enum Command {
         /// Allow the paired Mac to write plain text to this Plasma clipboard.
         #[arg(long)]
         sync_clipboard_from_mac: bool,
+        /// Allow sending new Desktop Mode clipboard text to the paired Mac.
+        #[arg(long)]
+        sync_clipboard_to_mac: bool,
+        #[arg(long)]
+        control_stdin: bool,
     },
     /// Check whether this Plasma session can switch configured keyboard layouts.
     LayoutStatus {
@@ -64,6 +72,18 @@ trait KeySink {
 
 trait ClipboardSink {
     fn set_text(&mut self, text: &str) -> Result<(), String>;
+}
+
+#[derive(Default)]
+struct ClipboardEchoSuppression(Option<String>);
+
+impl ClipboardEchoSuppression {
+    fn record_applied(&mut self, text: &str) {
+        self.0 = Some(text.to_owned());
+    }
+    fn should_skip(&mut self, text: &str, explicit: bool) -> bool {
+        !explicit && self.0.take().as_deref() == Some(text)
+    }
 }
 
 fn gaming_session(current: Option<&str>, session: Option<&str>) -> bool {
@@ -184,7 +204,15 @@ fn handle_client(
     let session = receive_client_ready(stream, pairing_secret)?;
     session.write_packet(stream, 0, &Packet::ServerReady)?;
     let shutdown = AtomicBool::new(false);
-    handle_authenticated_client(stream, &session, sink, &shutdown, None, None)
+    handle_authenticated_client(
+        stream,
+        &session,
+        sink,
+        &shutdown,
+        None,
+        None,
+        (false, &AtomicBool::new(false)),
+    )
 }
 
 fn receive_client_ready(
@@ -210,12 +238,16 @@ fn handle_authenticated_client(
     shutdown: &AtomicBool,
     layout_switcher: Option<&PlasmaLayoutSwitcher>,
     clipboard_sink: Option<&mut dyn ClipboardSink>,
+    reverse_clipboard: (bool, &AtomicBool),
 ) -> Result<(), BridgeError> {
+    let (allow_clipboard_to_mac, manual_clipboard_request) = reverse_clipboard;
     // A bounded timeout makes shutdown deterministic without treating an idle
     // keyboard as a failed session. If a partial frame spans the timeout, the
     // connection is rejected safely by framing/authentication on its next read.
     stream.set_read_timeout(Some(SESSION_POLL_INTERVAL))?;
-    stream.set_write_timeout(None)?;
+    // A stalled peer must not indefinitely hold virtual keys while a clipboard
+    // acknowledgement or transfer is being sent.
+    stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
     let mut next_sequence = 1u64;
     // The TCP connection is full-duplex. Use a separate cloned handle for
     // acknowledgements so the receiver can keep accepting keyboard input while
@@ -224,9 +256,73 @@ fn handle_authenticated_client(
     let mut next_response_sequence = 1u64;
     let mut clipboard_transfer: Option<ClipboardTransfer> = None;
     let mut clipboard_sink = clipboard_sink;
+    let mut watcher: Option<clipboard_watch::ClipboardWatcher> = None;
+    let mut suppression = ClipboardEchoSuppression::default();
+    let mut transfer_id = 0u64;
+    manual_clipboard_request.store(false, Ordering::Release);
+    let mut watcher_ready = false;
     loop {
         if shutdown.load(Ordering::Acquire) {
             return Ok(());
+        }
+        if manual_clipboard_request.swap(false, Ordering::AcqRel) {
+            if watcher_ready {
+                if let Some(watcher) = watcher.as_ref() {
+                    watcher.send_current();
+                }
+            } else {
+                eprintln!("Steam Deck clipboard sharing is not connected.");
+            }
+        }
+        if let Some(event) = watcher
+            .as_ref()
+            .and_then(|watcher| watcher.events.try_recv().ok())
+        {
+            if let clipboard_watch::WatchEvent::Ready(ready) = event {
+                watcher_ready = ready;
+                session.write_packet(
+                    &mut response_stream,
+                    next_response_sequence,
+                    &Packet::ClipboardCapabilities { deck_to_mac: ready },
+                )?;
+                next_response_sequence = next_response_sequence
+                    .checked_add(1)
+                    .ok_or(BridgeError::Handshake)?;
+                continue;
+            }
+            eprintln!("Could not read plain text from the Steam Deck clipboard.");
+        }
+        if let Some((text, explicit)) = watcher.as_ref().and_then(|watcher| watcher.take_text()) {
+            if !suppression.should_skip(&text, explicit) {
+                transfer_id = transfer_id.checked_add(1).ok_or(BridgeError::Handshake)?;
+                let bytes = text.as_bytes();
+                let count = bytes.len().div_ceil(MAX_CLIPBOARD_CHUNK_BYTES);
+                let mut packets = Vec::with_capacity(count + 2);
+                packets.push(Packet::ClipboardStart {
+                    origin: ClipboardOrigin::SteamDeck,
+                    transfer_id,
+                    total_bytes: bytes.len() as u32,
+                    chunk_count: count as u16,
+                });
+                for (index, chunk) in bytes.chunks(MAX_CLIPBOARD_CHUNK_BYTES).enumerate() {
+                    packets.push(Packet::ClipboardChunk {
+                        origin: ClipboardOrigin::SteamDeck,
+                        transfer_id,
+                        index: index as u16,
+                        bytes: chunk.to_vec(),
+                    });
+                }
+                packets.push(Packet::ClipboardEnd {
+                    origin: ClipboardOrigin::SteamDeck,
+                    transfer_id,
+                });
+                for packet in packets {
+                    session.write_packet(&mut response_stream, next_response_sequence, &packet)?;
+                    next_response_sequence = next_response_sequence
+                        .checked_add(1)
+                        .ok_or(BridgeError::Handshake)?;
+                }
+            }
         }
         let (sequence, packet) = match session.read_packet(stream) {
             Ok(packet) => packet,
@@ -295,6 +391,7 @@ fn handle_authenticated_client(
                 let delivery = match clipboard_sink.as_deref_mut() {
                     Some(sink) => match sink.set_text(&text) {
                         Ok(()) => {
+                            suppression.record_applied(&text);
                             eprintln!("Steam Deck clipboard updated from Mac.");
                             ClipboardDelivery::Written
                         }
@@ -329,9 +426,37 @@ fn handle_authenticated_client(
             | Packet::ClipboardStart { .. }
             | Packet::ClipboardChunk { .. }
             | Packet::ClipboardEnd { .. }
-            | Packet::ClipboardDelivery { .. } => return Err(BridgeError::InvalidPacket),
+            | Packet::ClipboardCapabilities { .. }
+            | Packet::ClipboardDelivery {
+                origin: ClipboardOrigin::Mac,
+                ..
+            } => return Err(BridgeError::InvalidPacket),
+            Packet::ClipboardDelivery {
+                origin: ClipboardOrigin::SteamDeck,
+                delivery,
+                ..
+            } => match delivery {
+                ClipboardDelivery::Written => eprintln!("Clipboard received by Mac."),
+                ClipboardDelivery::Unavailable | ClipboardDelivery::Failed => {
+                    eprintln!("Mac could not accept the clipboard.")
+                }
+            },
             Packet::ReleaseAll => sink.release_all()?,
-            Packet::Ping => {}
+            Packet::Ping => {
+                let allowed = allow_clipboard_to_mac && WaylandClipboardSink::new().is_ok();
+                if allowed && watcher.is_none() {
+                    watcher = Some(clipboard_watch::ClipboardWatcher::start());
+                } else if !allowed {
+                    session.write_packet(
+                        &mut response_stream,
+                        next_response_sequence,
+                        &Packet::ClipboardCapabilities { deck_to_mac: false },
+                    )?;
+                    next_response_sequence = next_response_sequence
+                        .checked_add(1)
+                        .ok_or(BridgeError::Handshake)?;
+                }
+            }
         }
     }
 }
@@ -1043,8 +1168,10 @@ fn serve(
     shutdown: Arc<AtomicBool>,
     sync_layout_from_mac: bool,
     layout_mappings: Vec<String>,
-    sync_clipboard_from_mac: bool,
+    clipboard_config: ((bool, bool), Arc<AtomicBool>),
 ) -> io::Result<()> {
+    let (clipboard_directions, manual_clipboard_request) = clipboard_config;
+    let (sync_clipboard_from_mac, sync_clipboard_to_mac) = clipboard_directions;
     listener.set_nonblocking(true)?;
     let layout_switcher = if sync_layout_from_mac {
         match PlasmaLayoutSwitcher::new(&layout_mappings) {
@@ -1084,6 +1211,7 @@ fn serve(
                 let active_session = Arc::clone(&active_session);
                 let pending_handshakes = Arc::clone(&pending_handshakes);
                 let shutdown = Arc::clone(&shutdown);
+                let manual_clipboard_request = Arc::clone(&manual_clipboard_request);
                 let layout_switcher = layout_switcher.clone();
                 workers.push(thread::spawn(move || {
                     let session = receive_client_ready(&mut stream, &pairing_secret);
@@ -1120,6 +1248,7 @@ fn serve(
                                                 clipboard_sink
                                                     .as_mut()
                                                     .map(|sink| sink as &mut dyn ClipboardSink),
+                                                (sync_clipboard_to_mac, &manual_clipboard_request),
                                             )
                                         },
                                     )
@@ -1164,12 +1293,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             sync_layout_from_mac,
             layout_mappings,
             sync_clipboard_from_mac,
+            sync_clipboard_to_mac,
+            control_stdin,
         } => {
             let pairing_secret = PairingSecret::parse(&pairing_secret)?;
             let listener = TcpListener::bind(&bind)?;
             let sink = uinput::UinputSink::open()?;
             let shutdown = Arc::new(AtomicBool::new(false));
             let signal_shutdown = Arc::clone(&shutdown);
+            let manual_clipboard_request = Arc::new(AtomicBool::new(false));
+            if control_stdin {
+                let request = Arc::clone(&manual_clipboard_request);
+                thread::spawn(move || {
+                    for line in io::stdin().lock().lines().map_while(Result::ok) {
+                        if line == "send-clipboard" {
+                            request.store(true, Ordering::Release);
+                        }
+                    }
+                });
+            }
             ctrlc::set_handler(move || signal_shutdown.store(true, Ordering::Release))?;
             eprintln!("Listening on {bind}; keyboard event contents are not logged.");
             serve(
@@ -1179,7 +1321,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 shutdown,
                 sync_layout_from_mac,
                 layout_mappings,
-                sync_clipboard_from_mac,
+                (
+                    (sync_clipboard_from_mac, sync_clipboard_to_mac),
+                    manual_clipboard_request,
+                ),
             )?;
         }
         Command::LayoutStatus { layout_mappings } => {
@@ -1240,6 +1385,20 @@ mod receiver_tests {
         // Steam shortcut IDs describe the application, not the desktop session.
         assert!(!gaming_session(Some("KDE"), Some("plasma")));
         assert!(!gaming_session(None, None));
+    }
+
+    #[test]
+    fn remote_clipboard_echo_is_suppressed_without_suppressing_local_changes() {
+        let mut suppression = ClipboardEchoSuppression::default();
+        suppression.record_applied("remote");
+        assert!(suppression.should_skip("remote", false));
+        assert!(!suppression.should_skip("remote", false));
+        suppression.record_applied("remote");
+        assert!(!suppression.should_skip("local", false));
+        assert!(!suppression.should_skip("remote", false));
+        suppression.record_applied("remote");
+        assert!(!suppression.should_skip("remote", true));
+        assert!(suppression.should_skip("remote", false));
     }
 
     #[test]
@@ -1328,6 +1487,39 @@ mod receiver_tests {
     }
 
     #[test]
+    fn capability_probe_reports_disabled_without_disrupting_keyboard_session() {
+        let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_pairing = pairing.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut sink = TestSink::default();
+            handle_client(&mut stream, &server_pairing, &mut sink)
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        let challenge = mac_deck_receiver::read_server_hello(&mut client).unwrap();
+        let session = SessionFramer::new(derive_session_secret(&pairing, &challenge));
+        session
+            .write_packet(&mut client, 0, &Packet::ClientReady)
+            .unwrap();
+        assert_eq!(
+            session.read_packet(&mut client).unwrap(),
+            (0, Packet::ServerReady)
+        );
+        session.write_packet(&mut client, 1, &Packet::Ping).unwrap();
+        assert_eq!(
+            session.read_packet(&mut client).unwrap(),
+            (1, Packet::ClipboardCapabilities { deck_to_mac: false })
+        );
+        session
+            .write_packet(&mut client, 2, &Packet::Key { code: 30, value: 1 })
+            .unwrap();
+        drop(client);
+        assert!(server.join().unwrap().is_err());
+    }
+
+    #[test]
     fn clipboard_transfer_reports_a_content_free_delivery_result() {
         let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1349,6 +1541,7 @@ mod receiver_tests {
                 &shutdown,
                 None,
                 Some(&mut clipboard),
+                (false, &AtomicBool::new(false)),
             )
         });
 

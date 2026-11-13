@@ -7,7 +7,7 @@ use std::{
     collections::BTreeSet,
     env,
     fs::{self, OpenOptions},
-    io::{self, BufRead},
+    io::{self, BufRead, Write},
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -33,6 +33,8 @@ struct ReceiverSettings {
     #[serde(default)]
     sync_clipboard_from_mac: bool,
     #[serde(default)]
+    sync_clipboard_to_mac: bool,
+    #[serde(default)]
     layout_mappings: String,
 }
 
@@ -43,6 +45,7 @@ impl Default for ReceiverSettings {
             pairing_secret: PairingSecret::generate().to_base64(),
             sync_layout_from_mac: false,
             sync_clipboard_from_mac: false,
+            sync_clipboard_to_mac: false,
             layout_mappings: String::new(),
         }
     }
@@ -73,6 +76,19 @@ fn clipboard_diagnostic(line: &str) -> Option<&str> {
     if line == "Steam Deck clipboard updated from Mac." {
         return Some("Clipboard received from Mac.");
     }
+    match line {
+        "Clipboard received by Mac." => return Some("Clipboard received by Mac."),
+        "Mac could not accept the clipboard." => {
+            return Some("Mac could not accept the clipboard.")
+        }
+        "Steam Deck clipboard sharing is not connected." => {
+            return Some("Connect to the Mac and enable clipboard sharing on both devices.")
+        }
+        "Could not read plain text from the Steam Deck clipboard." => {
+            return Some("Could not read plain text from the Steam Deck clipboard.")
+        }
+        _ => {}
+    }
     let message = line.strip_prefix("Could not update the Steam Deck clipboard: ")?;
     match message {
         "Cannot connect to Wayland; open MacDeck in Desktop Mode"
@@ -95,6 +111,9 @@ trait ReceiverSupervisor {
     }
     fn start(&mut self, settings: &ReceiverSettings) -> Result<(), String>;
     fn stop(&mut self) -> Result<(), String>;
+    fn send_clipboard(&mut self) -> Result<(), String> {
+        Err("Clipboard sharing is unavailable.".to_owned())
+    }
 }
 
 impl ReceiverSupervisor for ReceiverProcess {
@@ -119,11 +138,12 @@ impl ReceiverSupervisor for ReceiverProcess {
             .arg("--bind")
             .arg(&settings.bind)
             .env("MAC_DECK_PAIRING_SECRET", &settings.pairing_secret)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .args(layout_sync_arguments(settings)?)
             .args(clipboard_sync_arguments(settings))
+            .arg("--control-stdin")
             .spawn()
             .map_err(|error| format!("Could not start receiver: {error}"))?;
         let (sender, receiver) = mpsc::channel();
@@ -153,6 +173,19 @@ impl ReceiverSupervisor for ReceiverProcess {
             }
             Err(error) => Err(format!("Could not inspect receiver: {error}")),
         }
+    }
+
+    fn send_clipboard(&mut self) -> Result<(), String> {
+        let input = self
+            .child
+            .as_mut()
+            .and_then(|child| child.stdin.as_mut())
+            .ok_or_else(|| {
+                "Enable Mac input and connect before sharing the clipboard.".to_owned()
+            })?;
+        input
+            .write_all(b"send-clipboard\n")
+            .map_err(|_| "Could not request clipboard sharing.".to_owned())
     }
 }
 
@@ -375,6 +408,8 @@ enum FocusTarget {
     GenerateSecret,
     SyncLayout,
     SyncClipboard,
+    SyncClipboardToMac,
+    SendClipboardToMac,
     LayoutMappings,
     CheckLayoutSync,
     RefreshSettingsAddresses,
@@ -387,13 +422,14 @@ enum FocusDirection {
 }
 
 impl FocusTarget {
-    const CONTROL_ORDER: [Self; 4] = [
+    const CONTROL_ORDER: [Self; 5] = [
         Self::ControlTab,
         Self::SettingsTab,
         Self::ToggleReceiver,
+        Self::SendClipboardToMac,
         Self::RefreshControlAddresses,
     ];
-    const SETTINGS_ORDER: [Self; 12] = [
+    const SETTINGS_ORDER: [Self; 13] = [
         Self::ControlTab,
         Self::SettingsTab,
         Self::ListenAddress,
@@ -403,6 +439,7 @@ impl FocusTarget {
         Self::GenerateSecret,
         Self::SyncLayout,
         Self::SyncClipboard,
+        Self::SyncClipboardToMac,
         Self::LayoutMappings,
         Self::CheckLayoutSync,
         Self::RefreshSettingsAddresses,
@@ -572,6 +609,18 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             }
             ui.add_space(12.0);
             ui.label("When disabled, the receiver stops and releases all injected keys.");
+            let response = ui.button("Send Deck clipboard now");
+            track_focus(focus_widgets, FocusTarget::SendClipboardToMac, &response);
+            if response.clicked() {
+                self.status = Some(if !self.settings.sync_clipboard_to_mac {
+                    "Enable Deck-to-Mac clipboard sharing in Settings first.".to_owned()
+                } else {
+                    match self.process.send_clipboard() {
+                        Ok(()) => "Sending clipboard to Mac…".to_owned(),
+                        Err(error) => error,
+                    }
+                });
+            }
             ui.add_space(20.0);
             ui.separator();
             ui.add_space(12.0);
@@ -669,7 +718,13 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             "Accept plain-text clipboard from Mac",
         );
         track_focus(focus_widgets, FocusTarget::SyncClipboard, &response);
-        ui.small("Off by default. Desktop Mode only; accepts new plain-text clipboard changes while connected. Contents are encrypted, never logged or saved, and are not sent back to the Mac.");
+        ui.small("Off by default. Desktop Mode only; clipboard text may contain sensitive information. Contents are encrypted and are not logged or saved by MacDeck.");
+        let response = ui.checkbox(
+            &mut self.settings.sync_clipboard_to_mac,
+            "Send plain-text clipboard to Mac",
+        );
+        track_focus(focus_widgets, FocusTarget::SyncClipboardToMac, &response);
+        ui.small("Off by default. Clipboard text can contain sensitive information.");
         ui.add_space(16.0);
         ui.heading("Steam Deck IP addresses");
         for address in &self.ip_addresses {
@@ -924,11 +979,14 @@ fn layout_sync_arguments(settings: &ReceiverSettings) -> Result<Vec<String>, Str
 }
 
 fn clipboard_sync_arguments(settings: &ReceiverSettings) -> Vec<String> {
-    settings
-        .sync_clipboard_from_mac
-        .then(|| "--sync-clipboard-from-mac".to_owned())
-        .into_iter()
-        .collect()
+    let mut args = Vec::new();
+    if settings.sync_clipboard_from_mac {
+        args.push("--sync-clipboard-from-mac".to_owned());
+    }
+    if settings.sync_clipboard_to_mac {
+        args.push("--sync-clipboard-to-mac".to_owned());
+    }
+    args
 }
 
 fn layout_status_arguments(settings: &ReceiverSettings) -> Result<Vec<String>, String> {
@@ -1251,6 +1309,7 @@ mod tests {
                 FocusTarget::ControlTab,
                 FocusTarget::SettingsTab,
                 FocusTarget::ToggleReceiver,
+                FocusTarget::SendClipboardToMac,
                 FocusTarget::RefreshControlAddresses,
             ]
         );
@@ -1261,6 +1320,7 @@ mod tests {
         assert!(settings_with_mappings.contains(&FocusTarget::ListenAddress));
         assert!(settings_with_mappings.contains(&FocusTarget::PairingSecret));
         assert!(settings_with_mappings.contains(&FocusTarget::SyncLayout));
+        assert!(settings_with_mappings.contains(&FocusTarget::SyncClipboardToMac));
         assert!(settings_with_mappings.contains(&FocusTarget::CheckLayoutSync));
         assert!(settings_with_mappings.contains(&FocusTarget::RefreshSettingsAddresses));
     }
@@ -1375,7 +1435,7 @@ mod tests {
                 Tab::Control,
                 false,
             ),
-            Some(FocusTarget::RefreshControlAddresses)
+            Some(FocusTarget::SendClipboardToMac)
         );
         assert_eq!(
             next_focus_target(None, FocusDirection::Next, Tab::Settings, false),
