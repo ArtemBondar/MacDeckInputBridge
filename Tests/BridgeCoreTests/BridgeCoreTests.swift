@@ -566,6 +566,16 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertNil(synchronization.packetsForChange(changeCount: 3, text: "after disconnect", origin: .mac))
     }
 
+    func testExplicitClipboardShareCanSendCurrentTextAndResetsObservationBaseline() throws {
+        var synchronization = ClipboardSynchronizationState()
+        synchronization.start(changeCount: 1)
+        let packets = try XCTUnwrap(
+            synchronization.packetsForExplicitText(changeCount: 4, text: "copied earlier", origin: .mac)
+        )
+        XCTAssertEqual(packets.first, .clipboardStart(origin: .mac, transferID: 1, totalBytes: 14, chunkCount: 1))
+        XCTAssertNil(synchronization.packetsForChange(changeCount: 4, text: "copied earlier", origin: .mac))
+    }
+
     func testClipboardSynchronizationIsDisabledByDefaultAndPersistsOnlyTheChoice() throws {
         let suite = "MacDeckInputBridgeTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

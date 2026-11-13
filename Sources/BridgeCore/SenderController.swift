@@ -136,6 +136,31 @@ public final class SenderController {
         updateMode()
     }
 
+    /// Sends the current plain-text Mac clipboard only after an explicit menu
+    /// action. This is useful while REMOTE mode owns Command-C, and it is
+    /// intentionally separate from background pasteboard observation.
+    public func sendCurrentClipboard() -> ClipboardSendResult {
+        guard mode == .remote else { return .notConnected }
+        guard settings?.syncClipboardFromMac == true, clipboardSyncEnabled else {
+            return .notEnabled
+        }
+        guard let text = NSPasteboard.general.string(forType: .string) else {
+            return .noPlainText
+        }
+        let changeCount = NSPasteboard.general.changeCount
+        guard let packets = clipboardSynchronization.packetsForExplicitText(
+            changeCount: changeCount,
+            text: text,
+            origin: .mac
+        ) else {
+            return .tooLarge
+        }
+        // Clipboard contents remain in memory only and are encrypted by
+        // SenderClient; they are never added to preferences or diagnostics.
+        packets.forEach { client?.send($0) }
+        return .sent
+    }
+
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         guard type == .keyDown || type == .keyUp || type == .flagsChanged else {
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -336,6 +361,14 @@ struct ReceiverCapabilities: Equatable {
     let clipboardSynchronization: Bool
 }
 
+public enum ClipboardSendResult: Equatable, Sendable {
+    case sent
+    case notConnected
+    case notEnabled
+    case noPlainText
+    case tooLarge
+}
+
 /// Records only the pasteboard change counter. Starting a session establishes
 /// a baseline, so a sensitive value copied before opt-in or connection is
 /// never transferred. It has no persistence and no content logging path.
@@ -359,6 +392,19 @@ struct ClipboardSynchronizationState {
     ) -> [BridgePacket]? {
         guard let previousChangeCount = lastChangeCount else { return nil }
         guard changeCount != previousChangeCount else { return nil }
+        lastChangeCount = changeCount
+        nextTransferID &+= 1
+        return BridgePacket.clipboardPackets(origin: origin, transferID: nextTransferID, text: text)
+    }
+
+    /// Explicit sharing may send the current value, including one copied
+    /// before this connection. Recording the current change count prevents the
+    /// periodic observer from immediately duplicating that user-approved send.
+    mutating func packetsForExplicitText(
+        changeCount: Int,
+        text: String,
+        origin: ClipboardOrigin
+    ) -> [BridgePacket]? {
         lastChangeCount = changeCount
         nextTransferID &+= 1
         return BridgePacket.clipboardPackets(origin: origin, transferID: nextTransferID, text: text)

@@ -118,7 +118,10 @@ then reconnect the keyboard.
 Clipboard sync requires an active Steam Deck Desktop Mode Wayland session. It
 does not run in Gaming Mode. It sends no existing clipboard when a connection
 starts, no non-text formats, and no clipboard contents are logged or saved.
-This release is one-way only—Deck clipboard changes are not sent to the Mac.
+Use **Send Mac clipboard now** in the Mac menu bar to explicitly share the
+current value—for example, when REMOTE mode would otherwise forward Command-C
+to the Deck. This release is one-way only—Deck clipboard changes are not sent
+to the Mac.
 The encrypted packet format includes an explicit transfer origin and ID so a
 future reverse-sync option can be added without echoing changes back.
 
