@@ -33,6 +33,9 @@ public final class SenderController {
     private var layoutSynchronization = LayoutSynchronizationState()
     private var clipboardSynchronization = ClipboardSynchronizationState()
     private var clipboardTimer: Timer?
+    // AppKit exposes a pasteboard change counter, but no documented global
+    // change notification. Poll only during an opted-in remote session.
+    private static let clipboardPollInterval: TimeInterval = 0.5
     private var activeClipboardGeneration: UInt64?
     private var inputSourceObserver: NSObjectProtocol?
     private var cocoaInputSourceObserver: NSObjectProtocol?
@@ -340,9 +343,11 @@ public final class SenderController {
     private func startClipboardMonitoring() {
         stopClipboardMonitoring()
         clipboardSynchronization.start(changeCount: NSPasteboard.general.changeCount)
-        clipboardTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        clipboardTimer = Timer.scheduledTimer(withTimeInterval: Self.clipboardPollInterval, repeats: true) { [weak self] _ in
             self?.clipboardDidChange()
         }
+        // Allow the system to coalesce wakeups while keeping sharing responsive.
+        clipboardTimer?.tolerance = Self.clipboardPollInterval / 5
     }
 
     private func stopClipboardMonitoring() {
@@ -355,10 +360,9 @@ public final class SenderController {
         guard mode == .remote,
               settings?.syncClipboardFromMac == true,
               clipboardSyncEnabled,
-              let text = NSPasteboard.general.string(forType: .string),
               let packets = clipboardSynchronization.packetsForChange(
                   changeCount: NSPasteboard.general.changeCount,
-                  text: text,
+                  text: NSPasteboard.general.string(forType: .string),
                   origin: .mac
               ) else { return }
         // Clipboard contents remain in memory only, are encrypted by SenderClient,
@@ -413,12 +417,13 @@ struct ClipboardSynchronizationState {
 
     mutating func packetsForChange(
         changeCount: Int,
-        text: String,
+        text: @autoclosure () -> String?,
         origin: ClipboardOrigin
     ) -> [BridgePacket]? {
         guard let previousChangeCount = lastChangeCount else { return nil }
         guard changeCount != previousChangeCount else { return nil }
         lastChangeCount = changeCount
+        guard let text = text() else { return nil }
         nextTransferID &+= 1
         return BridgePacket.clipboardPackets(origin: origin, transferID: nextTransferID, text: text)
     }
