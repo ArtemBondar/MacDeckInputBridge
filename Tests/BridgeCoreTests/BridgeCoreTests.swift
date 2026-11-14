@@ -3,15 +3,63 @@ import Security
 import XCTest
 
 final class BridgeCoreTests: XCTestCase {
-    func testClipboardCapabilityAcceptsLateReplyAndLaterUnavailableUpdate() {
-        var state = ClipboardCapabilityState()
+    private final class TestScheduler {
+        var now: TimeInterval = 0
+        var tasks: [(TimeInterval, () -> Void)] = []
+
+        func schedule(after delay: TimeInterval, action: @escaping () -> Void) {
+            tasks.append((now + delay, action))
+        }
+
+        func advance(to time: TimeInterval) {
+            now = time
+            let due = tasks.filter { $0.0 <= time }
+            tasks.removeAll { $0.0 <= time }
+            due.forEach { $0.1() }
+        }
+    }
+
+    func testClipboardCapabilityTimeoutIsScheduledAndAcceptsLateReply() {
+        let scheduler = TestScheduler()
+        let state = ClipboardCapabilityState(schedule: scheduler.schedule)
+        var timeoutCount = 0
         XCTAssertFalse(state.receive())
-        state.request()
-        XCTAssertTrue(state.timeout())
-        XCTAssertFalse(state.timeout())
+        state.request { timeoutCount += 1 }
+        let deadline = ClipboardCapabilityState.responseTimeoutSeconds
+        XCTAssertEqual(scheduler.tasks.first?.0, deadline)
+        scheduler.advance(to: deadline - 0.01)
+        XCTAssertEqual(timeoutCount, 0)
+        scheduler.advance(to: deadline)
+        XCTAssertEqual(timeoutCount, 1)
         XCTAssertTrue(state.receive())
         XCTAssertTrue(state.receive())
-        XCTAssertFalse(state.timeout())
+        scheduler.advance(to: deadline + 1)
+        XCTAssertEqual(timeoutCount, 1)
+    }
+
+    func testClipboardCapabilityDisconnectCancelsScheduledDiagnostic() {
+        let scheduler = TestScheduler()
+        let state = ClipboardCapabilityState(schedule: scheduler.schedule)
+        var timeoutCount = 0
+        state.request { timeoutCount += 1 }
+        state.invalidate()
+        scheduler.advance(to: ClipboardCapabilityState.responseTimeoutSeconds)
+        XCTAssertEqual(timeoutCount, 0)
+        XCTAssertFalse(state.receive())
+    }
+
+    func testClipboardCapabilityReplyAndNewRequestInvalidateOldDeadline() {
+        let scheduler = TestScheduler()
+        let state = ClipboardCapabilityState(schedule: scheduler.schedule)
+        var timeoutCount = 0
+        state.request { timeoutCount += 1 }
+        XCTAssertTrue(state.receive())
+        scheduler.advance(to: 1)
+        state.request { timeoutCount += 1 }
+        scheduler.advance(to: ClipboardCapabilityState.responseTimeoutSeconds)
+        XCTAssertEqual(timeoutCount, 0)
+        scheduler.advance(to: 1 + ClipboardCapabilityState.responseTimeoutSeconds)
+        XCTAssertEqual(timeoutCount, 1)
     }
 
     private let pairing = try! PairingSecret(base64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")

@@ -573,20 +573,43 @@ public struct ConnectionRetryPolicy: Equatable, Sendable {
 
 // A timeout reports unavailable but does not invalidate a late response or a
 // subsequent availability update from the same authenticated session.
-struct ClipboardCapabilityState {
+final class ClipboardCapabilityState {
+    // Allow a few receiver polling cycles and compositor initialization before
+    // reporting an unavailable optional feature, without delaying keyboard use.
+    static let responseTimeoutSeconds: TimeInterval = 3
+
+    typealias Schedule = (TimeInterval, @escaping () -> Void) -> Void
+    private let schedule: Schedule
     private var requested = false
     private var pending = false
+    private var requestID: UInt64 = 0
 
-    mutating func request() { requested = true; pending = true }
-    mutating func timeout() -> Bool {
-        guard pending else { return false }
-        pending = false
-        return true
+    init(schedule: @escaping Schedule) {
+        self.schedule = schedule
     }
-    mutating func receive() -> Bool {
+
+    func request(onTimeout: @escaping () -> Void) {
+        requested = true
+        pending = true
+        requestID &+= 1
+        let currentID = requestID
+        schedule(Self.responseTimeoutSeconds) { [weak self] in
+            guard let self, self.pending, self.requestID == currentID else { return }
+            self.pending = false
+            onTimeout()
+        }
+    }
+
+    func receive() -> Bool {
         guard requested else { return false }
         pending = false
         return true
+    }
+
+    func invalidate() {
+        requested = false
+        pending = false
+        requestID &+= 1
     }
 }
 
@@ -620,7 +643,9 @@ private final class SenderClient {
     var onDeckClipboardCapability: ((Bool) -> Void)?
     private var incomingClipboard: IncomingClipboardTransfer?
     private var deckClipboardAllowed = false
-    private var clipboardCapability = ClipboardCapabilityState()
+    private lazy var clipboardCapability = ClipboardCapabilityState { [queue] delay, action in
+        queue.asyncAfter(deadline: .now() + delay, execute: action)
+    }
 
     init(pairingSecret: String, retryPolicy: ConnectionRetryPolicy = .deckReceiverStartup) throws {
         pairing = try PairingSecret(base64: pairingSecret)
@@ -637,13 +662,11 @@ private final class SenderClient {
 
     func requestDeckClipboardCapability() {
         queue.async { [weak self] in
-            guard let self, self.isReady, let generation = self.activeGeneration else { return }
-            self.clipboardCapability.request()
-            self.sendApplicationPacket(.ping)
-            self.queue.asyncAfter(deadline: .now() + 3) { [weak self] in
-                guard let self, self.activeGeneration == generation, self.clipboardCapability.timeout() else { return }
-                self.onDeckClipboardCapability?(false)
+            guard let self, self.isReady, self.activeGeneration != nil else { return }
+            self.clipboardCapability.request { [weak self] in
+                self?.onDeckClipboardCapability?(false)
             }
+            self.sendApplicationPacket(.ping)
         }
     }
 
@@ -673,7 +696,6 @@ private final class SenderClient {
         isReady = false
         incomingClipboard = nil
         deckClipboardAllowed = false
-        clipboardCapability = ClipboardCapabilityState()
 
         let connection = NWConnection(
             host: NWEndpoint.Host(endpoint.host),
@@ -867,6 +889,7 @@ private final class SenderClient {
     }
 
     private func invalidateActiveConnection() {
+        clipboardCapability.invalidate()
         handshakeTimeoutWorkItem?.cancel()
         handshakeTimeoutWorkItem = nil
         let connection = self.connection
