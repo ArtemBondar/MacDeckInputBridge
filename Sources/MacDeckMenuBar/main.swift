@@ -9,6 +9,8 @@ struct MacDeckMenuBarApp: App {
 
     init() {
         let showInDock = DockVisibilityPreference.load()
+        // The bundle starts as an LSUIElement agent so hidden Dock icons never
+        // appear during launch. Promote it only if the saved setting requires it.
         // SwiftUI constructs App before AppKit has installed NSApp. Defer the
         // policy until the first main-loop turn; accessing NSApp here crashes
         // when launching the bundled application from Finder or the Dock.
