@@ -92,6 +92,11 @@ fn clipboard_diagnostic(line: &str) -> Option<&str> {
                 "Steam Deck clipboard monitoring stopped. Reconnect to restore clipboard sharing.",
             )
         }
+        "Steam Deck clipboard tracking is full. Reconnect to restore automatic sharing." => {
+            return Some(
+                "Steam Deck clipboard tracking is full. Reconnect to restore automatic sharing.",
+            )
+        }
         _ => {}
     }
     let message = line.strip_prefix("Could not update the Steam Deck clipboard: ")?;

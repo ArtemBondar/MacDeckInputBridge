@@ -4,8 +4,9 @@ use mac_deck_receiver::{
     ClipboardOrigin, Packet, PairingSecret, SessionFramer, MAX_CLIPBOARD_CHUNK_BYTES,
     MAX_CLIPBOARD_TEXT_BYTES,
 };
+use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     env,
     ffi::CString,
     io::{self, BufRead, Read, Write},
@@ -78,15 +79,50 @@ trait ClipboardSink {
     fn set_text(&mut self, text: &str) -> Result<(), String>;
 }
 
+// Limit per-session memory even if the clipboard watcher never catches up.
+const MAX_PENDING_CLIPBOARD_ECHOES: usize = 256;
+
 #[derive(Default)]
-struct ClipboardEchoSuppression(Option<String>);
+struct ClipboardEchoSuppression {
+    pending: VecDeque<[u8; 32]>,
+    overflowed: bool,
+}
 
 impl ClipboardEchoSuppression {
-    fn record_applied(&mut self, text: &str) {
-        self.0 = Some(text.to_owned());
+    fn record_applied(&mut self, text: &str) -> bool {
+        if self.overflowed {
+            return false;
+        }
+        if self.pending.len() == MAX_PENDING_CLIPBOARD_ECHOES {
+            // Fail closed until reconnect: an untracked update must not echo.
+            self.pending.clear();
+            self.overflowed = true;
+            return true;
+        }
+        self.pending
+            .push_back(Sha256::digest(text.as_bytes()).into());
+        false
     }
     fn should_skip(&mut self, text: &str, explicit: bool) -> bool {
-        !explicit && self.0.take().as_deref() == Some(text)
+        if explicit {
+            return false;
+        }
+        if self.overflowed {
+            return true;
+        }
+        let fingerprint: [u8; 32] = Sha256::digest(text.as_bytes()).into();
+        if let Some(index) = self
+            .pending
+            .iter()
+            .position(|pending| *pending == fingerprint)
+        {
+            // The watcher observes offers in order; earlier, coalesced offers
+            // can no longer arrive after the matched observation.
+            self.pending.drain(..=index);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -530,8 +566,10 @@ fn handle_authenticated_client(
                 let delivery = match clipboard_sink.as_deref_mut() {
                     Some(sink) => match sink.set_text(&text) {
                         Ok(()) => {
-                            suppression.record_applied(&text);
                             eprintln!("Steam Deck clipboard updated from Mac.");
+                            if allow_clipboard_to_mac && suppression.record_applied(&text) {
+                                eprintln!("Steam Deck clipboard tracking is full. Reconnect to restore automatic sharing.");
+                            }
                             ClipboardDelivery::Written
                         }
                         Err(error) => {
@@ -1622,10 +1660,37 @@ mod receiver_tests {
         assert!(!suppression.should_skip("remote", false));
         suppression.record_applied("remote");
         assert!(!suppression.should_skip("local", false));
-        assert!(!suppression.should_skip("remote", false));
+        assert!(suppression.should_skip("remote", false));
         suppression.record_applied("remote");
         assert!(!suppression.should_skip("remote", true));
         assert!(suppression.should_skip("remote", false));
+    }
+
+    #[test]
+    fn delayed_remote_observations_do_not_echo_or_consume_newer_markers() {
+        let mut suppression = ClipboardEchoSuppression::default();
+        suppression.record_applied("older");
+        suppression.record_applied("newer");
+        assert!(suppression.should_skip("older", false));
+        assert!(suppression.should_skip("newer", false));
+        assert!(!suppression.should_skip("local", false));
+
+        suppression.record_applied("coalesced");
+        suppression.record_applied("visible");
+        assert!(suppression.should_skip("visible", false));
+        assert!(!suppression.should_skip("coalesced", false));
+    }
+
+    #[test]
+    fn full_echo_tracking_fails_closed_but_allows_explicit_sends() {
+        let mut suppression = ClipboardEchoSuppression::default();
+        for _ in 0..MAX_PENDING_CLIPBOARD_ECHOES {
+            assert!(!suppression.record_applied("remote"));
+        }
+        assert!(suppression.record_applied("overflow"));
+        assert!(!suppression.record_applied("later"));
+        assert!(suppression.should_skip("any text", false));
+        assert!(!suppression.should_skip("any text", true));
     }
 
     #[test]
