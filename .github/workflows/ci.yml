@@ -4,8 +4,29 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    outputs:
+      swift: ${{ steps.scope.outputs.swift }}
+      receiver: ${{ steps.scope.outputs.receiver }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_ci_scope.py'
+      - id: scope
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 scripts/ci-scope.py "$BASE_SHA" "$HEAD_SHA"
+
   swift:
+    needs: scope
+    if: needs.scope.outputs.swift == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,6 +34,8 @@ jobs:
       - run: sh scripts/test-macos-app-bundle.sh
 
   receiver:
+    needs: scope
+    if: needs.scope.outputs.receiver == 'true'
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -24,3 +47,25 @@ jobs:
       - run: cargo clippy --locked --all-targets --features desktop-ui -- -D warnings
       - run: cargo test --locked --features desktop-ui
       - run: sh scripts/test-steamdeck-app-installation.sh
+
+  ci-result:
+    name: CI result
+    if: always()
+    needs: [scope, swift, receiver]
+    runs-on: ubuntu-24.04
+    env:
+      SCOPE_RESULT: ${{ needs.scope.result }}
+      SWIFT_SELECTED: ${{ needs.scope.outputs.swift }}
+      RECEIVER_SELECTED: ${{ needs.scope.outputs.receiver }}
+      SWIFT_RESULT: ${{ needs.swift.result }}
+      RECEIVER_RESULT: ${{ needs.receiver.result }}
+    steps:
+      - name: Verify selected checks completed successfully
+        shell: bash
+        run: |
+          [[ "$SCOPE_RESULT" == success ]] || exit 1
+          [[ "$SWIFT_SELECTED" == true || "$SWIFT_SELECTED" == false ]] || exit 1
+          [[ "$RECEIVER_SELECTED" == true || "$RECEIVER_SELECTED" == false ]] || exit 1
+          [[ "$SWIFT_SELECTED" == true || "$RECEIVER_SELECTED" == true ]] || exit 1
+          [[ "$SWIFT_SELECTED" != true || "$SWIFT_RESULT" == success ]] || exit 1
+          [[ "$RECEIVER_SELECTED" != true || "$RECEIVER_RESULT" == success ]] || exit 1
