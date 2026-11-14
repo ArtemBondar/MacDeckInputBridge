@@ -264,10 +264,10 @@ final class SettingsWindowControllerTests: XCTestCase {
             XCTAssertEqual(image.size.height, 22)
         }
 
-        XCTAssertEqual(
+        XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .local).tiffRepresentation,
             MenuBarDeckIcon.image(for: .connecting).tiffRepresentation,
-            "The first CONNECTING frame intentionally starts with zero dots."
+            "Connecting begins with a dimmed filled center."
         )
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .local).tiffRepresentation,
@@ -286,7 +286,7 @@ final class SettingsWindowControllerTests: XCTestCase {
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 0).tiffRepresentation,
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 21).tiffRepresentation,
-            "The connecting center pulses between empty and filled."
+            "The connecting center pulses between dim and full."
         )
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 10).tiffRepresentation,
