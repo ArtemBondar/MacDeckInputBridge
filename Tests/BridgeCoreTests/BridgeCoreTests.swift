@@ -647,6 +647,25 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertNil(synchronization.packetsForChange(changeCount: 3, text: "after disconnect", origin: .mac))
     }
 
+    func testClipboardTextIsReadOnlyForNewChangesWhileMonitoring() {
+        var synchronization = ClipboardSynchronizationState()
+        var reads = 0
+        func readText(_ value: String?) -> String? { reads += 1; return value }
+
+        XCTAssertNil(synchronization.packetsForChange(changeCount: 1, text: readText("old"), origin: .mac))
+        synchronization.start(changeCount: 1)
+        XCTAssertNil(synchronization.packetsForChange(changeCount: 1, text: readText("old"), origin: .mac))
+        XCTAssertEqual(reads, 0)
+        XCTAssertNotNil(synchronization.packetsForChange(changeCount: 2, text: readText("new"), origin: .mac))
+        XCTAssertEqual(reads, 1)
+        XCTAssertNil(synchronization.packetsForChange(changeCount: 3, text: readText(nil), origin: .mac))
+        XCTAssertNil(synchronization.packetsForChange(changeCount: 3, text: readText(nil), origin: .mac))
+        XCTAssertEqual(reads, 2)
+        synchronization.reset()
+        XCTAssertNil(synchronization.packetsForChange(changeCount: 4, text: readText("after"), origin: .mac))
+        XCTAssertEqual(reads, 2)
+    }
+
     func testExplicitClipboardShareCanSendCurrentTextAndResetsObservationBaseline() throws {
         var synchronization = ClipboardSynchronizationState()
         synchronization.start(changeCount: 1)
