@@ -270,6 +270,8 @@ struct ReceiverApp<P = ReceiverProcess> {
     #[cfg(unix)]
     hidden_to_tray: bool,
     #[cfg(unix)]
+    restoring_from_tray: bool,
+    #[cfg(unix)]
     notifications: notification::NotificationBridge,
 }
 
@@ -542,6 +544,8 @@ impl ReceiverApp<ReceiverProcess> {
             #[cfg(unix)]
             hidden_to_tray: false,
             #[cfg(unix)]
+            restoring_from_tray: false,
+            #[cfg(unix)]
             notifications: notification::NotificationBridge::default(),
         }
     }
@@ -553,6 +557,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         match action {
             tray::Action::Show | tray::Action::Settings => {
                 self.hidden_to_tray = false;
+                self.restoring_from_tray = true;
                 self.selected_tab = if action == tray::Action::Settings {
                     Tab::Settings
                 } else {
@@ -579,6 +584,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             }
             tray::Action::Offline => {
                 self.hidden_to_tray = false;
+                self.restoring_from_tray = true;
                 self.status = Some(
                     "System tray unavailable. Use the MacDeck window to control input.".into(),
                 );
@@ -600,6 +606,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
     fn show_notification_fallback(&mut self, context: &egui::Context, message: &'static str) {
         if self.hidden_to_tray {
             self.hidden_to_tray = false;
+            self.restoring_from_tray = true;
             self.status = Some(message.to_owned());
             context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             context.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -644,6 +651,8 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             quitting: false,
             #[cfg(unix)]
             hidden_to_tray: false,
+            #[cfg(unix)]
+            restoring_from_tray: false,
             #[cfg(unix)]
             notifications: notification::NotificationBridge::default(),
         }
@@ -1114,7 +1123,16 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
 #[cfg(unix)]
 impl<P: ReceiverSupervisor> ReceiverApp<P> {
     fn hide_minimized_to_tray(&mut self, context: &egui::Context, available: bool, can_hide: bool) {
-        if context.input(|input| input.viewport().minimized == Some(true))
+        let minimized = context.input(|input| input.viewport().minimized);
+        // The viewport snapshot predates commands issued in this frame; wait
+        // for the window manager to confirm restoration before hiding again.
+        if self.restoring_from_tray {
+            if minimized == Some(false) {
+                self.restoring_from_tray = false;
+            }
+            return;
+        }
+        if minimized == Some(true)
             && available
             && can_hide
             && !self.quitting
@@ -1525,6 +1543,55 @@ mod tests {
         });
         assert!(!app.hidden_to_tray);
         assert_eq!(app.selected_tab, Tab::Settings);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tray_restore_is_not_undone_by_stale_minimized_snapshots() {
+        let directory = unique_test_directory("tray-restore-interleaving");
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            directory.join(CONFIG_FILE),
+            FakeReceiverProcess::default(),
+        );
+        app.hidden_to_tray = true;
+        let context = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .minimized = Some(true);
+        let output = context.run(input.clone(), |ctx| {
+            app.handle_tray_action(ctx, tray::Action::Settings);
+            app.hide_minimized_to_tray(ctx, true, true);
+        });
+        let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
+        assert!(commands
+            .iter()
+            .any(|c| matches!(c, egui::ViewportCommand::Minimized(false))));
+        assert!(!commands
+            .iter()
+            .any(|c| matches!(c, egui::ViewportCommand::Visible(false))));
+        let output = context.run(input.clone(), |ctx| {
+            app.hide_minimized_to_tray(ctx, true, true)
+        });
+        assert!(!output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .iter()
+            .any(|c| matches!(c, egui::ViewportCommand::Visible(false))));
+        let mut restored = input.clone();
+        restored
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .minimized = Some(false);
+        let _ = context.run(restored, |ctx| app.hide_minimized_to_tray(ctx, true, true));
+        let output = context.run(input, |ctx| app.hide_minimized_to_tray(ctx, true, true));
+        assert!(output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .iter()
+            .any(|c| matches!(c, egui::ViewportCommand::Visible(false))));
     }
 
     #[cfg(unix)]
@@ -1964,6 +2031,8 @@ mod tests {
             quitting: false,
             #[cfg(unix)]
             hidden_to_tray: false,
+            #[cfg(unix)]
+            restoring_from_tray: false,
             #[cfg(unix)]
             notifications: notification::NotificationBridge::default(),
         };
