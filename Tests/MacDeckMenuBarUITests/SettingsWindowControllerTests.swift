@@ -4,6 +4,33 @@ import XCTest
 
 @MainActor
 final class SettingsWindowControllerTests: XCTestCase {
+    func testIconStyleSelectionPreviewsAndSaves() throws {
+        let controller = SettingsWindowController()
+        var saved: SettingsDraft?
+        controller.show(draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "", iconStyle: .logo)) {
+            saved = $0
+            return nil
+        }
+        let logo = try XCTUnwrap(controller.iconPreviews[2].image?.tiffRepresentation)
+        controller.iconStylePopup.selectItem(at: 1)
+        NSApp.sendAction(controller.iconStylePopup.action!, to: controller.iconStylePopup.target, from: controller.iconStylePopup)
+        let classic = try XCTUnwrap(controller.iconPreviews[2].image?.tiffRepresentation)
+        XCTAssertNotEqual(logo, classic)
+        XCTAssertTrue(controller.iconPreviews.allSatisfy { $0.image != nil })
+        controller.saveButton.performClick(nil)
+        XCTAssertEqual(saved?.iconStyle, .classic)
+    }
+
+    func testIconStylePreferencePersistsAndFallsBack() {
+        let suite = "MacDeckMenuBarUITests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(MenuBarIconStyle.load(from: defaults), .logo)
+        MenuBarIconStyle.classic.save(to: defaults)
+        XCTAssertEqual(MenuBarIconStyle.load(from: defaults), .classic)
+        defaults.set("unknown", forKey: "menuBarIconStyle")
+        XCTAssertEqual(MenuBarIconStyle.load(from: defaults), .logo)
+    }
     func testFirstSettingsPresentationCentersTheWindow() throws {
         let controller = SettingsWindowController()
         let window = try XCTUnwrap(controller.window)
