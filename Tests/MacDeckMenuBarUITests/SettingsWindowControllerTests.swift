@@ -258,9 +258,9 @@ final class SettingsWindowControllerTests: XCTestCase {
         ]
         for (status, description) in expectedDescriptions {
             let image = MenuBarDeckIcon.image(for: status)
-            XCTAssertTrue(image.isTemplate)
+            XCTAssertEqual(image.isTemplate, status != .remote)
             XCTAssertEqual(image.accessibilityDescription, description)
-            XCTAssertEqual(image.size.width, 30)
+            XCTAssertEqual(image.size.width, 20)
             XCTAssertEqual(image.size.height, 20)
         }
 
@@ -274,6 +274,11 @@ final class SettingsWindowControllerTests: XCTestCase {
             MenuBarDeckIcon.image(for: .remote).tiffRepresentation,
             "REMOTE must render a visibly captured keyboard state."
         )
+        XCTAssertNotEqual(
+            MenuBarDeckIcon.image(for: .remote, isDark: false).tiffRepresentation,
+            MenuBarDeckIcon.image(for: .remote, isDark: true).tiffRepresentation,
+            "The filled logo must contrast against both menu bar appearances."
+        )
         XCTAssertEqual(MenuBarDeckIcon.connectingFrameCount, 4)
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 0).tiffRepresentation,
@@ -283,12 +288,12 @@ final class SettingsWindowControllerTests: XCTestCase {
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 1).tiffRepresentation,
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 2).tiffRepresentation,
-            "Connecting animation must progress through all three dots."
+            "Connecting animation must progress to its largest dot."
         )
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 2).tiffRepresentation,
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 3).tiffRepresentation,
-            "Connecting animation must visibly reach three dots."
+            "Connecting animation must visibly return toward its initial state."
         )
     }
 

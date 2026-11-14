@@ -6,6 +6,7 @@ import SwiftUI
 @main
 struct MacDeckMenuBarApp: App {
     @StateObject private var model = MenuBarModel()
+    @Environment(\.colorScheme) private var colorScheme
 
     init() {
         let showInDock = DockVisibilityPreference.load()
@@ -25,9 +26,9 @@ struct MacDeckMenuBarApp: App {
         } label: {
             Image(nsImage: MenuBarDeckIcon.image(
                 for: model.status.presentationStatus,
-                connectingPhase: model.connectionAnimationPhase
+                connectingPhase: model.connectionAnimationPhase,
+                isDark: colorScheme == .dark
             ))
-                .renderingMode(.template)
                 .accessibilityLabel(model.status.title)
         }
     }
