@@ -258,10 +258,10 @@ final class SettingsWindowControllerTests: XCTestCase {
         ]
         for (status, description) in expectedDescriptions {
             let image = MenuBarDeckIcon.image(for: status)
-            XCTAssertTrue(image.isTemplate)
+            XCTAssertEqual(image.isTemplate, status != .remote)
             XCTAssertEqual(image.accessibilityDescription, description)
-            XCTAssertEqual(image.size.width, 20)
-            XCTAssertEqual(image.size.height, 20)
+            XCTAssertEqual(image.size.width, 22)
+            XCTAssertEqual(image.size.height, 22)
         }
 
         XCTAssertEqual(
@@ -274,23 +274,23 @@ final class SettingsWindowControllerTests: XCTestCase {
             MenuBarDeckIcon.image(for: .remote).tiffRepresentation,
             "REMOTE must render a visibly captured keyboard state."
         )
-        XCTAssertFalse(MenuBarDeckIcon.remoteAccent().isTemplate)
-        XCTAssertEqual(MenuBarDeckIcon.remoteAccent().size, NSSize(width: 20, height: 20))
-        XCTAssertEqual(MenuBarDeckIcon.connectingFrameCount, 4)
+
+        let remote = MenuBarDeckIcon.image(for: .remote, isDark: true)
+        let bitmap = NSBitmapImageRep(data: remote.tiffRepresentation!)!
+        let colors = (0..<bitmap.pixelsWide).flatMap { x in
+            (0..<bitmap.pixelsHigh).compactMap { y in bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) }
+        }
+        XCTAssertTrue(colors.contains { $0.blueComponent > 0.8 && $0.greenComponent > 0.3 && $0.redComponent < 0.3 && $0.alphaComponent > 0.5 }, "The blue center must be part of the single remote image.")
+        XCTAssertNotEqual(remote.tiffRepresentation, MenuBarDeckIcon.image(for: .remote, isDark: false).tiffRepresentation)
+        XCTAssertEqual(MenuBarDeckIcon.connectingFrameCount, 42)
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 0).tiffRepresentation,
-            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 1).tiffRepresentation,
-            "Connecting animation must begin with an empty display, then show one dot."
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 21).tiffRepresentation,
+            "The connecting center pulses between empty and filled."
         )
         XCTAssertNotEqual(
-            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 1).tiffRepresentation,
-            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 2).tiffRepresentation,
-            "Connecting animation must progress to its largest dot."
-        )
-        XCTAssertNotEqual(
-            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 2).tiffRepresentation,
-            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 3).tiffRepresentation,
-            "Connecting animation must visibly return toward its initial state."
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 10).tiffRepresentation,
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 21).tiffRepresentation
         )
     }
 

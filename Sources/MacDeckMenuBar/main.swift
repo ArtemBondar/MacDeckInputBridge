@@ -23,21 +23,24 @@ struct MacDeckMenuBarApp: App {
         MenuBarExtra {
             MenuContentView(model: model)
         } label: {
-            ZStack {
-                Image(nsImage: MenuBarDeckIcon.image(
-                    for: model.status.presentationStatus,
-                    connectingPhase: model.connectionAnimationPhase
-                ))
-                .renderingMode(.template)
-                if model.status.presentationStatus == .remote {
-                    Image(nsImage: MenuBarDeckIcon.remoteAccent())
-                        .renderingMode(.original)
-                        .accessibilityHidden(true)
-                }
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(model.status.title)
+            MenuBarIconLabel(status: model.status, phase: model.connectionAnimationPhase)
         }
+    }
+}
+
+private struct MenuBarIconLabel: View {
+    let status: SenderStatus
+    let phase: Int
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Image(nsImage: MenuBarDeckIcon.image(
+            for: status.presentationStatus,
+            connectingPhase: phase,
+            isDark: colorScheme == .dark
+        ))
+        .renderingMode(status.presentationStatus == .remote ? .original : .template)
+        .accessibilityLabel(status.title)
     }
 }
 
@@ -234,11 +237,13 @@ private final class MenuBarModel: ObservableObject {
     private func startConnectionAnimation() {
         guard connectionAnimationTimer == nil else { return }
         connectionAnimationPhase = 0
-        connectionAnimationTimer = Timer.scheduledTimer(withTimeInterval: 0.32, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: MenuBarDeckIcon.connectingFrameInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.advanceConnectionAnimation()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        connectionAnimationTimer = timer
     }
 
     private func advanceConnectionAnimation() {

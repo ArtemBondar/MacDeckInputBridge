@@ -3,16 +3,24 @@ import AppKit
 /// Status artwork based on the supplied Steam Deck logo SVGs. Local and
 /// connecting images are templates, so macOS supplies the menu bar foreground.
 public enum MenuBarDeckIcon {
-    public static let connectingFrameCount = 4
+    public static let connectingFrameCount = 42
+    public static let connectingFrameInterval: TimeInterval = 1.4 / Double(connectingFrameCount)
 
     public static func image(
         for status: MenuBarStatus,
-        connectingPhase: Int = 0
+        connectingPhase: Int = 0,
+        isDark: Bool = false
     ) -> NSImage {
-        let size = NSSize(width: 20, height: 20)
+        let size = NSSize(width: 22, height: 22)
         let image = NSImage(size: size, flipped: false) { _ in
-            NSColor.white.setStroke()
-            NSColor.white.setFill()
+            NSGraphicsContext.saveGraphicsState()
+            let scale = NSAffineTransform()
+            scale.scale(by: 1.1)
+            scale.concat()
+            defer { NSGraphicsContext.restoreGraphicsState() }
+            let ink: NSColor = status == .remote && !isDark ? .black : .white
+            ink.setStroke()
+            ink.setFill()
 
             // Coordinates reproduce the 18 × 18 SVGs, inset by one point.
             let center = NSPoint(x: 7.7, y: 10)
@@ -44,32 +52,21 @@ public enum MenuBarDeckIcon {
                 // connecting never resembles the fully filled remote state.
                 if status == .connecting {
                     let phase = ((connectingPhase % connectingFrameCount) + connectingFrameCount) % connectingFrameCount
-                    let radii: [CGFloat] = [0.0, 0.8, 1.5, 0.8]
-                    let dotRadius = radii[phase]
-                    if dotRadius > 0 {
-                        NSBezierPath(ovalIn: NSRect(
-                            x: center.x - dotRadius, y: center.y - dotRadius,
-                            width: dotRadius * 2, height: dotRadius * 2
-                        )).fill()
-                    }
+                    let opacity = 0.5 - 0.5 * cos(2 * .pi * Double(phase) / Double(connectingFrameCount))
+                    NSColor.white.withAlphaComponent(opacity).setFill()
+                    NSBezierPath(ovalIn: NSRect(
+                        x: center.x - 2.2, y: center.y - 2.2,
+                        width: 4.4, height: 4.4
+                    )).fill()
                 }
+            } else {
+                NSColor(calibratedRed: 26 / 255, green: 159 / 255, blue: 1, alpha: 1).setFill()
+                circle.fill()
             }
             return true
         }
-        image.isTemplate = true
+        image.isTemplate = status != .remote
         image.accessibilityDescription = "Steam Deck keyboard input, \(statusDescription(status))"
-        return image
-    }
-
-    /// A separate, non-template layer preserves the blue accent while macOS
-    /// tints the surrounding logo for the actual menu bar appearance.
-    public static func remoteAccent() -> NSImage {
-        let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { _ in
-            NSColor(calibratedRed: 26 / 255, green: 159 / 255, blue: 1, alpha: 1).setFill()
-            NSBezierPath(ovalIn: NSRect(x: 4.5, y: 6.8, width: 6.4, height: 6.4)).fill()
-            return true
-        }
-        image.isTemplate = false
         return image
     }
 
