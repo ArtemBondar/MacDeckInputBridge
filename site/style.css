@@ -24,3 +24,8 @@ body{font-family:system-ui,-apple-system,sans-serif}.header{border-bottom:2px so
 @media(prefers-color-scheme:dark){:root:not([data-theme]) .hero-art{background:#263d35;color:#edf3e9}:root:not([data-theme]) .art-top,:root:not([data-theme]) .art-bottom,:root:not([data-theme]) .shortcut-label{color:#b0c8b6}:root:not([data-theme]) .keys span{background:#1c3029;color:#edf3e9;border-color:#83a894}}
 :root[data-theme="dark"] .hero-art{background:#263d35;color:#edf3e9}:root[data-theme="dark"] .art-top,:root[data-theme="dark"] .art-bottom,:root[data-theme="dark"] .shortcut-label{color:#b0c8b6}:root[data-theme="dark"] .keys span{background:#1c3029;color:#edf3e9;border-color:#83a894}
 @media(max-width:380px){.hero-art{padding:22px}.device-name{font-size:21px}.deck-mark{width:34px;height:34px}}
+
+/* Keyboard keycaps, sized for legibility and anchored in the illustration. */
+.hero-art{justify-content:center}.switch-scene{padding:28px 0}.keys{align-items:center;gap:8px}.keys kbd{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:66px;min-height:48px;padding:8px 10px;border:1.5px solid #557467;border-bottom-width:4px;border-radius:8px;background:#f9f6ec;color:#263d35;font:700 18px system-ui,sans-serif}.keys kbd small{font-size:11px;font-weight:600}.keys .key-plus{min-width:0;padding:0;border:0;background:transparent;color:#587366;font:600 16px system-ui,sans-serif}
+@media(prefers-color-scheme:dark){:root:not([data-theme]) .keys kbd{background:#1c3029;color:#edf3e9;border-color:#83a894}:root:not([data-theme]) .keys .key-plus{color:#b0c8b6}}
+:root[data-theme="dark"] .keys kbd{background:#1c3029;color:#edf3e9;border-color:#83a894}:root[data-theme="dark"] .keys .key-plus{color:#b0c8b6}
