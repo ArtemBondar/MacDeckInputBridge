@@ -4,6 +4,8 @@ Perform this checklist on a MacBook and Steam Deck OLED in Desktop Mode before e
 
 ## Desktop Mode system tray
 
+- In Settings, enable **Hide taskbar icon when system tray is available** and save. Verify only the tray icon remains while MacDeck is open and after minimizing. Reopen Settings from the tray, turn the option off, and confirm the taskbar icon returns. Restart and verify the saved choice. Disable the tray and confirm the taskbar entry returns so the window remains accessible. Repeat in light and dark themes and verify Gaming Mode still has normal taskbar/window behavior.
+
 - Launch the installed MacDeck app and confirm its icon appears in Plasma's system tray (including the hidden-items area). Check the tooltip and menu say whether Mac input is enabled; this state does not assert a Mac is connected.
 - Use the tray menu to enable and disable input, send clipboard text, open Settings, and reopen the Control window. Verify errors are visible and no action exposes clipboard contents or the pairing secret.
 - Close the window and confirm MacDeck remains available in the tray and an enabled receiver remains active. Quit from the tray and confirm the receiver exits and held keys are released.

@@ -44,6 +44,8 @@ struct ReceiverSettings {
     #[serde(default)]
     sync_clipboard_to_mac: bool,
     #[serde(default)]
+    hide_taskbar_when_tray_available: bool,
+    #[serde(default)]
     layout_mappings: String,
 }
 
@@ -55,6 +57,7 @@ impl Default for ReceiverSettings {
             sync_layout_from_mac: false,
             sync_clipboard_from_mac: false,
             sync_clipboard_to_mac: false,
+            hide_taskbar_when_tray_available: false,
             layout_mappings: String::new(),
         }
     }
@@ -273,6 +276,8 @@ struct ReceiverApp<P = ReceiverProcess> {
     restoring_from_tray: bool,
     #[cfg(unix)]
     notifications: notification::NotificationBridge,
+    #[cfg(target_os = "linux")]
+    taskbar_hidden: Option<bool>,
 }
 
 /// Reads the Steam Deck controls directly from Linux evdev. Steam does
@@ -451,6 +456,7 @@ enum FocusTarget {
     LayoutMappings,
     CheckLayoutSync,
     RefreshSettingsAddresses,
+    HideTaskbar,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -467,7 +473,7 @@ impl FocusTarget {
         Self::SendClipboardToMac,
         Self::RefreshControlAddresses,
     ];
-    const SETTINGS_ORDER: [Self; 13] = [
+    const SETTINGS_ORDER: [Self; 14] = [
         Self::ControlTab,
         Self::SettingsTab,
         Self::ListenAddress,
@@ -478,6 +484,7 @@ impl FocusTarget {
         Self::SyncLayout,
         Self::SyncClipboard,
         Self::SyncClipboardToMac,
+        Self::HideTaskbar,
         Self::LayoutMappings,
         Self::CheckLayoutSync,
         Self::RefreshSettingsAddresses,
@@ -547,6 +554,8 @@ impl ReceiverApp<ReceiverProcess> {
             restoring_from_tray: false,
             #[cfg(unix)]
             notifications: notification::NotificationBridge::default(),
+            #[cfg(target_os = "linux")]
+            taskbar_hidden: None,
         }
     }
 }
@@ -655,6 +664,8 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             restoring_from_tray: false,
             #[cfg(unix)]
             notifications: notification::NotificationBridge::default(),
+            #[cfg(target_os = "linux")]
+            taskbar_hidden: None,
         }
     }
 
@@ -880,6 +891,14 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         );
         track_focus(focus_widgets, FocusTarget::SyncClipboardToMac, &response);
         ui.small("Off by default. Clipboard text can contain sensitive information.");
+        let response = ui.checkbox(
+            &mut self.settings.hide_taskbar_when_tray_available,
+            "Hide taskbar icon when system tray is available",
+        );
+        track_focus(focus_widgets, FocusTarget::HideTaskbar, &response);
+        ui.small(
+            "Desktop Mode only. Use the tray to reopen MacDeck. Save settings to keep this choice.",
+        );
         ui.add_space(16.0);
         ui.heading("Steam Deck IP addresses");
         for address in &self.ip_addresses {
@@ -1009,6 +1028,25 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
                 .map_or_else(Vec::new, tray::TrayBridge::poll);
             for action in actions {
                 self.handle_tray_action(context, action);
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let desired = self.settings.hide_taskbar_when_tray_available
+                    && self.tray.as_ref().is_some_and(tray::TrayBridge::available);
+                if self.taskbar_hidden != Some(desired) {
+                    match set_taskbar_visibility(_frame, desired) {
+                        Ok(()) => self.taskbar_hidden = Some(desired),
+                        Err(()) => {
+                            self.taskbar_hidden = Some(desired);
+                            if desired {
+                                self.status = Some(
+                                    "Could not hide the taskbar icon in this desktop session."
+                                        .into(),
+                                );
+                            }
+                        }
+                    }
+                }
             }
             let running = self.process.is_running();
             if let Some(tray) = &mut self.tray {
@@ -1142,6 +1180,46 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             self.hidden_to_tray = true;
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn set_taskbar_visibility(frame: &eframe::Frame, hidden: bool) -> Result<(), ()> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use x11rb::{
+        connection::Connection,
+        protocol::xproto::{ClientMessageEvent, ConnectionExt, EventMask},
+    };
+    let RawWindowHandle::Xlib(handle) = frame.window_handle().map_err(|_| ())?.as_raw() else {
+        return Err(());
+    };
+    let window = u32::try_from(handle.window).map_err(|_| ())?;
+    let (connection, screen) = x11rb::connect(None).map_err(|_| ())?;
+    let root = connection.setup().roots.get(screen).ok_or(())?.root;
+    let state = connection
+        .intern_atom(false, b"_NET_WM_STATE")
+        .map_err(|_| ())?
+        .reply()
+        .map_err(|_| ())?
+        .atom;
+    let skip = connection
+        .intern_atom(false, b"_NET_WM_STATE_SKIP_TASKBAR")
+        .map_err(|_| ())?
+        .reply()
+        .map_err(|_| ())?
+        .atom;
+    // EWMH: action 1 adds the property, 0 removes it; source 1 is an app.
+    let event = ClientMessageEvent::new(32, window, state, [u32::from(hidden), skip, 0, 1, 0]);
+    connection
+        .send_event(
+            false,
+            root,
+            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+            event,
+        )
+        .map_err(|_| ())?
+        .check()
+        .map_err(|_| ())?;
+    connection.flush().map_err(|_| ())
 }
 
 #[cfg(target_os = "linux")]
@@ -1406,6 +1484,23 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hide_taskbar_preference_is_opt_in_and_round_trips() {
+        let mut settings = ReceiverSettings::default();
+        assert!(!settings.hide_taskbar_when_tray_available);
+        settings.hide_taskbar_when_tray_available = true;
+        let encoded = toml::to_string(&settings).unwrap();
+        let decoded: ReceiverSettings = toml::from_str(&encoded).unwrap();
+        assert!(decoded.hide_taskbar_when_tray_available);
+        let legacy = encoded
+            .lines()
+            .filter(|line| !line.starts_with("hide_taskbar_when_tray_available"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let decoded: ReceiverSettings = toml::from_str(&legacy).unwrap();
+        assert!(!decoded.hide_taskbar_when_tray_available);
+    }
     use get_if_addrs::Ifv4Addr;
 
     #[test]
@@ -2035,6 +2130,8 @@ mod tests {
             restoring_from_tray: false,
             #[cfg(unix)]
             notifications: notification::NotificationBridge::default(),
+            #[cfg(target_os = "linux")]
+            taskbar_hidden: None,
         };
         app.settings.bind = "127.0.0.1:4343".to_owned();
         app.apply_settings().unwrap();
