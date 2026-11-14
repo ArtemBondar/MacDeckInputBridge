@@ -1,9 +1,31 @@
 import AppKit
-import MacDeckMenuBarUI
+@testable import MacDeckMenuBarUI
 import XCTest
 
 @MainActor
 final class SettingsWindowControllerTests: XCTestCase {
+    func testConnectingPreviewAnimatesBothStylesAndStopsOnClose() throws {
+        let controller = SettingsWindowController()
+        controller.show(draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "")) { _ in nil }
+        XCTAssertTrue(controller.isPreviewAnimationRunning)
+        let start = try XCTUnwrap(controller.iconPreviews[1].image?.tiffRepresentation)
+        for _ in 0..<21 { controller.advancePreviewAnimation() }
+        XCTAssertNotEqual(start, controller.iconPreviews[1].image?.tiffRepresentation)
+        controller.iconStylePopup.selectItem(at: 1)
+        NSApp.sendAction(controller.iconStylePopup.action!, to: controller.iconStylePopup.target, from: controller.iconStylePopup)
+        let classic = try XCTUnwrap(controller.iconPreviews[1].image?.tiffRepresentation)
+        for _ in 0..<20 { controller.advancePreviewAnimation() }
+        XCTAssertNotEqual(classic, controller.iconPreviews[1].image?.tiffRepresentation)
+        controller.close()
+        XCTAssertFalse(controller.isPreviewAnimationRunning)
+        let phase = controller.previewPhase
+        controller.advancePreviewAnimation()
+        XCTAssertEqual(phase, controller.previewPhase)
+        controller.show(draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "")) { _ in nil }
+        XCTAssertTrue(controller.isPreviewAnimationRunning)
+        controller.close()
+    }
+
     func testIconStyleSelectionPreviewsAndSaves() throws {
         let controller = SettingsWindowController()
         var saved: SettingsDraft?

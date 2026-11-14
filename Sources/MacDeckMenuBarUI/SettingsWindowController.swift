@@ -66,6 +66,9 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     public let saveButton = NSButton(title: "Save", target: nil, action: nil)
 
     private var onSave: ((SettingsDraft) -> String?)?
+    private var previewTimer: Timer?
+    private(set) var previewPhase = 0
+    var isPreviewAnimationRunning: Bool { previewTimer != nil }
 
     public init() {
         let window = NSWindow(
@@ -83,6 +86,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     }
 
     required init?(coder: NSCoder) { nil }
+
+    deinit { previewTimer?.invalidate() }
 
     public func show(
         draft: SettingsDraft,
@@ -120,6 +125,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         window.makeKeyAndOrderFront(nil)
         window.makeMain()
         window.orderFrontRegardless()
+        startPreviewAnimation()
         DispatchQueue.main.async { [weak self, weak window] in
             guard let self, let window else { return }
             DockVisibilityPreference.apply(showInDock: draft.showInDock)
@@ -131,7 +137,40 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     }
 
     public func windowWillClose(_ notification: Notification) {
+        stopPreviewAnimation()
         onSave = nil
+    }
+
+    public func windowDidMiniaturize(_ notification: Notification) {
+        stopPreviewAnimation()
+    }
+
+    public func windowDidDeminiaturize(_ notification: Notification) {
+        startPreviewAnimation()
+    }
+
+    private func startPreviewAnimation() {
+        guard previewTimer == nil, let window, window.isVisible, !window.isMiniaturized else { return }
+        let timer = Timer(timeInterval: MenuBarDeckIcon.connectingFrameInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.advancePreviewAnimation() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        previewTimer = timer
+    }
+
+    private func stopPreviewAnimation() {
+        previewTimer?.invalidate()
+        previewTimer = nil
+    }
+
+    func advancePreviewAnimation() {
+        guard previewTimer != nil else { return }
+        guard let window, window.isVisible, !window.isMiniaturized else {
+            stopPreviewAnimation()
+            return
+        }
+        previewPhase = (previewPhase + 1) % MenuBarDeckIcon.connectingFrameCount
+        updateConnectingPreview()
     }
 
     @objc private func save(_ sender: Any?) {
@@ -168,8 +207,13 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     @objc private func updateIconPreviews(_ sender: Any?) {
         let isDark = window?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         for (index, status) in [MenuBarStatus.local, .connecting, .remote].enumerated() {
-            iconPreviews[index].image = MenuBarDeckIcon.image(for: status, connectingPhase: 21, isDark: isDark, style: selectedIconStyle)
+            iconPreviews[index].image = MenuBarDeckIcon.image(for: status, connectingPhase: previewPhase, isDark: isDark, style: selectedIconStyle)
         }
+    }
+
+    private func updateConnectingPreview() {
+        let isDark = window?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        iconPreviews[1].image = MenuBarDeckIcon.image(for: .connecting, connectingPhase: previewPhase, isDark: isDark, style: selectedIconStyle)
     }
 
     private func isKeychainRelatedNotice(_ notice: String) -> Bool {
