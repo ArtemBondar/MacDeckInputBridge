@@ -39,6 +39,7 @@ private final class MenuBarModel: ObservableObject {
     @Published var showInDock: Bool
     @Published var allowLocalSecretFallback: Bool
     @Published var syncClipboardFromMac: Bool
+    @Published var syncClipboardFromDeck: Bool
     @Published var status: SenderStatus = .local
     @Published var message: String?
     @Published var connectionAnimationPhase = 0
@@ -57,6 +58,7 @@ private final class MenuBarModel: ObservableObject {
         showInDock = DockVisibilityPreference.load()
         allowLocalSecretFallback = store.allowsLocalSecretFallback
         syncClipboardFromMac = settings.syncClipboardFromMac
+        syncClipboardFromDeck = settings.syncClipboardFromDeck
         do {
             pairingSecret = try store.loadPairingSecret() ?? ""
         } catch {
@@ -76,6 +78,16 @@ private final class MenuBarModel: ObservableObject {
         }
         sender.clipboardSynchronizationUnavailable = { [weak self] in
             self?.message = "Clipboard sync is unavailable. Enable it in MacDeck Settings while the Steam Deck is in Desktop Mode."
+        }
+        sender.deckClipboardUnavailable = { [weak self] in
+            self?.message = "Steam Deck clipboard sharing is unavailable. Enable it on the Deck in Desktop Mode, then reconnect."
+        }
+        sender.deckClipboardAvailable = { [weak self] in
+            let unavailable = "Steam Deck clipboard sharing is unavailable. Enable it on the Deck in Desktop Mode, then reconnect."
+            if self?.message == unavailable { self?.message = nil }
+        }
+        sender.deckClipboardReceived = { [weak self] success in
+            self?.message = success ? "Clipboard received from Steam Deck." : "Could not update the Mac clipboard."
         }
         sender.clipboardDeliveryResult = { [weak self] result in
             self?.message = switch result {
@@ -151,6 +163,7 @@ private final class MenuBarModel: ObservableObject {
                 showInDock: showInDock,
                 allowLocalSecretFallback: allowLocalSecretFallback,
                 syncClipboardFromMac: syncClipboardFromMac,
+                syncClipboardFromDeck: syncClipboardFromDeck,
                 currentInputSourceID: SenderController.currentKeyboardLayoutIdentifier()
             ),
             notice: message
@@ -167,6 +180,7 @@ private final class MenuBarModel: ObservableObject {
             showInDock = draft.showInDock
             allowLocalSecretFallback = draft.allowLocalSecretFallback
             syncClipboardFromMac = draft.syncClipboardFromMac
+            syncClipboardFromDeck = draft.syncClipboardFromDeck
             let settings = try settingsFromFields()
             try store.saveSettings(settings)
             try store.setAllowsLocalSecretFallback(allowLocalSecretFallback)
@@ -249,7 +263,8 @@ private final class MenuBarModel: ObservableObject {
         return try BridgeSettings(
             host: host,
             port: portValue,
-            syncClipboardFromMac: syncClipboardFromMac
+            syncClipboardFromMac: syncClipboardFromMac,
+            syncClipboardFromDeck: syncClipboardFromDeck
         ).validated()
     }
 }
@@ -298,6 +313,9 @@ private struct MenuContentView: View {
             Button("Send Mac clipboard now") {
                 model.sendCurrentClipboard()
             }
+        }
+        if let message = model.message, model.status == .remote {
+            Text(message)
         }
         Divider()
         Button("Settings…") {

@@ -109,21 +109,21 @@ for matching rules and the custom-layout fallback.
 
 ## Clipboard sync (optional)
 
-MacDeck can copy new plain-text clipboard changes from the Mac to the Steam
-Deck while the encrypted keyboard connection is active. It is off by default:
-enable **Sync plain-text clipboard to Steam Deck** in the Mac app and
-**Accept plain-text clipboard from Mac** in MacDeck’s Desktop Mode Settings,
-then reconnect the keyboard.
+MacDeck can share new plain-text clipboard changes while the encrypted keyboard
+connection is active. Each direction is off by default and requires consent on
+both devices. For Mac → Deck, enable **Sync plain-text clipboard to Steam Deck**
+on Mac and **Accept plain-text clipboard from Mac** on Deck. For Deck → Mac,
+enable **Send plain-text clipboard to Mac** on Deck and **Accept plain-text
+clipboard from Steam Deck** on Mac. Save both settings and reconnect.
 
 Clipboard sync requires an active Steam Deck Desktop Mode Wayland session. It
 does not run in Gaming Mode. It sends no existing clipboard when a connection
 starts, no non-text formats, and no clipboard contents are logged or saved.
 Use **Send Mac clipboard now** in the Mac menu bar to explicitly share the
 current value—for example, when REMOTE mode would otherwise forward Command-C
-to the Deck. This release is one-way only—Deck clipboard changes are not sent
-to the Mac.
-The encrypted packet format includes an explicit transfer origin and ID so a
-future reverse-sync option can be added without echoing changes back.
+to the Deck. Use **Send Deck clipboard now** on the Deck Control page to share
+its current value. Clipboard text may contain sensitive information. Recent
+changes are coalesced if they arrive faster than the connection can process them.
 
 ## Uninstall from Steam Deck
 

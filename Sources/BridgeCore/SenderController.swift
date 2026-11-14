@@ -19,6 +19,9 @@ public final class SenderController {
     /// A content-free acknowledgement from the Steam Deck after a clipboard
     /// transfer has completed. It never exposes the copied text.
     public var clipboardDeliveryResult: ((ClipboardDelivery) -> Void)?
+    public var deckClipboardUnavailable: (() -> Void)?
+    public var deckClipboardAvailable: (() -> Void)?
+    public var deckClipboardReceived: ((Bool) -> Void)?
 
     private var state = InputStateMachine()
     private var client: SenderClient?
@@ -30,6 +33,7 @@ public final class SenderController {
     private var layoutSynchronization = LayoutSynchronizationState()
     private var clipboardSynchronization = ClipboardSynchronizationState()
     private var clipboardTimer: Timer?
+    private var activeClipboardGeneration: UInt64?
     private var inputSourceObserver: NSObjectProtocol?
     private var cocoaInputSourceObserver: NSObjectProtocol?
     private var inputSourceSettlementWorkItem: DispatchWorkItem?
@@ -78,14 +82,33 @@ public final class SenderController {
         stopClipboardMonitoring()
         client?.close()
         client = try SenderClient(pairingSecret: pairingSecret)
-        client?.onReady = { [weak self] capabilities in
-            DispatchQueue.main.async { self?.connectionReady(capabilities: capabilities) }
+        client?.onReady = { [weak self] generation, capabilities in
+            DispatchQueue.main.async {
+                self?.activeClipboardGeneration = generation
+                self?.connectionReady(capabilities: capabilities)
+            }
         }
         client?.onFailure = { [weak self] in
             DispatchQueue.main.async { self?.connectionLost() }
         }
         client?.onClipboardDelivery = { [weak self] delivery in
             DispatchQueue.main.async { self?.clipboardDeliveryResult?(delivery) }
+        }
+        client?.onIncomingClipboard = { [weak self] generation, transferID, text in
+            DispatchQueue.main.async {
+                guard let self, self.activeClipboardGeneration == generation, self.mode == .remote, self.settings?.syncClipboardFromDeck == true else { return }
+                NSPasteboard.general.clearContents()
+                let success = NSPasteboard.general.setString(text, forType: .string)
+                self.clipboardSynchronization.start(changeCount: NSPasteboard.general.changeCount)
+                self.client?.send(.clipboardDelivery(origin: .steamDeck, transferID: transferID, delivery: success ? .written : .failed))
+                self.deckClipboardReceived?(success)
+            }
+        }
+        client?.onDeckClipboardCapability = { [weak self] available in
+            DispatchQueue.main.async {
+                if available { self?.deckClipboardAvailable?() }
+                else { self?.deckClipboardUnavailable?() }
+            }
         }
     }
 
@@ -122,6 +145,7 @@ public final class SenderController {
     }
 
     public func stop() {
+        activeClipboardGeneration = nil
         if mode == .remote { client?.send(.releaseAll) }
         client?.close()
         if let eventTap { CFMachPortInvalidate(eventTap) }
@@ -220,10 +244,12 @@ public final class SenderController {
         } else if settings?.syncClipboardFromMac == true {
             clipboardSynchronizationUnavailable?()
         }
+        if settings?.syncClipboardFromDeck == true { client?.requestDeckClipboardCapability() }
         updateMode()
     }
 
     private func connectionLost() {
+        activeClipboardGeneration = nil
         let wasConnectingOrRemote = state.mode != .local
         state.connectionLost()
         layoutSyncEnabled = false
@@ -545,6 +571,48 @@ public struct ConnectionRetryPolicy: Equatable, Sendable {
     }
 }
 
+// A timeout reports unavailable but does not invalidate a late response or a
+// subsequent availability update from the same authenticated session.
+final class ClipboardCapabilityState {
+    // Allow a few receiver polling cycles and compositor initialization before
+    // reporting an unavailable optional feature, without delaying keyboard use.
+    static let responseTimeoutSeconds: TimeInterval = 3
+
+    typealias Schedule = (TimeInterval, @escaping () -> Void) -> Void
+    private let schedule: Schedule
+    private var requested = false
+    private var pending = false
+    private var requestID: UInt64 = 0
+
+    init(schedule: @escaping Schedule) {
+        self.schedule = schedule
+    }
+
+    func request(onTimeout: @escaping () -> Void) {
+        requested = true
+        pending = true
+        requestID &+= 1
+        let currentID = requestID
+        schedule(Self.responseTimeoutSeconds) { [weak self] in
+            guard let self, self.pending, self.requestID == currentID else { return }
+            self.pending = false
+            onTimeout()
+        }
+    }
+
+    func receive() -> Bool {
+        guard requested else { return false }
+        pending = false
+        return true
+    }
+
+    func invalidate() {
+        requested = false
+        pending = false
+        requestID &+= 1
+    }
+}
+
 private final class SenderClient {
     private static let maximumReceiveLength = SessionFramer.maximumFrameSize + 4
 
@@ -568,9 +636,16 @@ private final class SenderClient {
     private var attempt = 0
     private var retryWorkItem: DispatchWorkItem?
     private var handshakeTimeoutWorkItem: DispatchWorkItem?
-    var onReady: ((ReceiverCapabilities) -> Void)?
+    var onReady: ((UInt64, ReceiverCapabilities) -> Void)?
     var onFailure: (() -> Void)?
     var onClipboardDelivery: ((ClipboardDelivery) -> Void)?
+    var onIncomingClipboard: ((UInt64, UInt64, String) -> Void)?
+    var onDeckClipboardCapability: ((Bool) -> Void)?
+    private var incomingClipboard: IncomingClipboardTransfer?
+    private var deckClipboardAllowed = false
+    private lazy var clipboardCapability = ClipboardCapabilityState { [queue] delay, action in
+        queue.asyncAfter(deadline: .now() + delay, execute: action)
+    }
 
     init(pairingSecret: String, retryPolicy: ConnectionRetryPolicy = .deckReceiverStartup) throws {
         pairing = try PairingSecret(base64: pairingSecret)
@@ -583,6 +658,16 @@ private final class SenderClient {
 
     func send(_ packet: BridgePacket) {
         queue.async { [weak self] in self?.sendApplicationPacket(packet) }
+    }
+
+    func requestDeckClipboardCapability() {
+        queue.async { [weak self] in
+            guard let self, self.isReady, self.activeGeneration != nil else { return }
+            self.clipboardCapability.request { [weak self] in
+                self?.onDeckClipboardCapability?(false)
+            }
+            self.sendApplicationPacket(.ping)
+        }
     }
 
     func close() {
@@ -609,6 +694,8 @@ private final class SenderClient {
         decoder = FrameDecoder()
         session = nil
         isReady = false
+        incomingClipboard = nil
+        deckClipboardAllowed = false
 
         let connection = NWConnection(
             host: NWEndpoint.Host(endpoint.host),
@@ -680,10 +767,26 @@ private final class SenderClient {
         let packet = try session.open(combined: frame)
         self.session = session
         if isReady {
-            guard case let .clipboardDelivery(origin, _, delivery) = packet, origin == .mac else {
+            switch packet {
+            case let .clipboardDelivery(origin, _, delivery) where origin == .mac:
+                onClipboardDelivery?(delivery)
+            case let .clipboardCapabilities(deckToMac):
+                guard clipboardCapability.receive() else { throw ProtocolError.invalidFrame }
+                deckClipboardAllowed = deckToMac
+                if !deckToMac { incomingClipboard = nil }
+                onDeckClipboardCapability?(deckToMac)
+            case let .clipboardStart(origin, id, size, chunks) where origin == .steamDeck && deckClipboardAllowed:
+                guard incomingClipboard == nil, let transfer = IncomingClipboardTransfer(transferID: id, totalBytes: size, chunkCount: chunks) else { throw ProtocolError.invalidFrame }
+                incomingClipboard = transfer
+            case let .clipboardChunk(origin, id, index, bytes) where origin == .steamDeck && deckClipboardAllowed:
+                guard incomingClipboard?.append(transferID: id, index: index, chunk: bytes) == true else { throw ProtocolError.invalidFrame }
+            case let .clipboardEnd(origin, id) where origin == .steamDeck && deckClipboardAllowed:
+                guard let text = incomingClipboard?.finish(transferID: id) else { throw ProtocolError.invalidFrame }
+                incomingClipboard = nil
+                onIncomingClipboard?(generation, id, text)
+            default:
                 throw ProtocolError.invalidFrame
             }
-            onClipboardDelivery?(delivery)
             return
         }
         let capabilities: ReceiverCapabilities
@@ -702,7 +805,7 @@ private final class SenderClient {
         isReady = true
         handshakeTimeoutWorkItem?.cancel()
         handshakeTimeoutWorkItem = nil
-        onReady?(capabilities)
+        onReady?(generation, capabilities)
     }
 
     private func sendApplicationPacket(_ packet: BridgePacket) {
@@ -786,6 +889,7 @@ private final class SenderClient {
     }
 
     private func invalidateActiveConnection() {
+        clipboardCapability.invalidate()
         handshakeTimeoutWorkItem?.cancel()
         handshakeTimeoutWorkItem = nil
         let connection = self.connection

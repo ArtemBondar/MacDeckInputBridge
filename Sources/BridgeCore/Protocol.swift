@@ -27,6 +27,7 @@ public enum BridgePacket: Equatable, Sendable {
     case key(code: UInt16, value: UInt8)
     case releaseAll
     case ping
+    case clipboardCapabilities(deckToMac: Bool)
     case clientReady
     case serverReady
     /// The receiver has opted into layout synchronization for this session.
@@ -46,6 +47,7 @@ public enum BridgePacket: Equatable, Sendable {
         case let .key(code, value): return Data([1, UInt8(code >> 8), UInt8(code & 0xff), value])
         case .releaseAll: return Data([2])
         case .ping: return Data([3])
+        case let .clipboardCapabilities(deckToMac): return Data([14, deckToMac ? 1 : 0])
         case .clientReady: return Data([4])
         case .serverReady: return Data([5])
         case .serverReadyWithLayoutSync: return Data([6])
@@ -87,6 +89,8 @@ public enum BridgePacket: Equatable, Sendable {
             self = .key(code: UInt16(bytes[1]) << 8 | UInt16(bytes[2]), value: bytes[3])
         } else if bytes == [2] { self = .releaseAll
         } else if bytes == [3] { self = .ping
+        } else if bytes.count == 2, bytes[0] == 14, bytes[1] <= 1 {
+            self = .clipboardCapabilities(deckToMac: bytes[1] == 1)
         } else if bytes == [4] { self = .clientReady
         } else if bytes == [5] { self = .serverReady
         } else if bytes == [6] { self = .serverReadyWithLayoutSync

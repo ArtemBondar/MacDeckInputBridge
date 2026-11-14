@@ -77,6 +77,9 @@ pub enum Packet {
     },
     ReleaseAll,
     Ping,
+    ClipboardCapabilities {
+        deck_to_mac: bool,
+    },
     ClientReady,
     ServerReady,
     ServerReadyWithLayoutSync,
@@ -128,6 +131,7 @@ impl Packet {
             Self::Key { code, value } => vec![1, (*code >> 8) as u8, *code as u8, *value],
             Self::ReleaseAll => vec![2],
             Self::Ping => vec![3],
+            Self::ClipboardCapabilities { deck_to_mac } => vec![14, u8::from(*deck_to_mac)],
             Self::ClientReady => vec![4],
             Self::ServerReady => vec![5],
             Self::ServerReadyWithLayoutSync => vec![6],
@@ -196,6 +200,9 @@ impl Packet {
             }),
             [2] => Ok(Self::ReleaseAll),
             [3] => Ok(Self::Ping),
+            [14, value @ 0..=1] => Ok(Self::ClipboardCapabilities {
+                deck_to_mac: *value == 1,
+            }),
             [4] => Ok(Self::ClientReady),
             [5] => Ok(Self::ServerReady),
             [6] => Ok(Self::ServerReadyWithLayoutSync),

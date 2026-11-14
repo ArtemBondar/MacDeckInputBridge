@@ -15,3 +15,12 @@ Perform this checklist on a MacBook and Steam Deck OLED in Desktop Mode before e
 11. In Steam Deck Gaming Mode, open MacDeck at 1280×800. Confirm the receiver state and IP address are visible on Control, then open Settings and use the D-pad to reach every control. Focus must remain visible and scroll the page to the focused item; A/Enter must activate buttons and checkboxes. With a text field focused, use Steam + X to open the on-screen keyboard.
 12. In Desktop Mode, run the installed app's **Check Deck layout sync** with the normal Plasma environment. Confirm the diagnostic finds an executable qdbus and reports the configured layouts. Repeat with a non-executable qdbus earlier on PATH and a usable one later; confirm layout sync still works. In an isolated environment with no usable qdbus, confirm the diagnostic explains how to expose or configure it and ordinary keyboard forwarding remains available.
 13. Launch MacDeck through Steam as a non-Steam shortcut in Desktop Mode as well as in Gaming Mode. Record whether clipboard and controller controls behave as intended in each mode; do not infer the session from Steam application IDs alone.
+
+# Bidirectional clipboard verification
+
+- In Desktop Mode, enable both directions on both devices and reconnect. Verify no clipboard is sent on connection.
+- Copy new plain text on each device in turn and paste it on the other. Verify no repeated echo; repeat with Unicode and text near the size limit.
+- Copy before connecting, then use each device's explicit send action and verify delivery status.
+- Disable each direction, disconnect and reconnect, and verify that old clipboard values are not replayed and normal keyboard input continues.
+- Exercise simultaneous changes, unsupported formats, oversized text and a missing compositor capability. Verify errors do not include clipboard text or secrets.
+- Test Gaming Mode separately and record the actual result; Desktop Mode results do not establish Gaming Mode support.
