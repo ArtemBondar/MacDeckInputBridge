@@ -4,6 +4,37 @@ import XCTest
 
 @MainActor
 final class SettingsWindowControllerTests: XCTestCase {
+    func testIconStyleSelectionPreviewsAndSaves() throws {
+        let controller = SettingsWindowController()
+        var saved: SettingsDraft?
+        controller.show(draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "", iconStyle: .logo)) {
+            saved = $0
+            return nil
+        }
+        XCTAssertEqual(
+            controller.iconPreviews[0].image?.tiffRepresentation,
+            MenuBarDeckIcon.image(for: .local, connectingPhase: 21, style: .logo).tiffRepresentation
+        )
+        let logo = try XCTUnwrap(controller.iconPreviews[2].image?.tiffRepresentation)
+        controller.iconStylePopup.selectItem(at: 1)
+        NSApp.sendAction(controller.iconStylePopup.action!, to: controller.iconStylePopup.target, from: controller.iconStylePopup)
+        let classic = try XCTUnwrap(controller.iconPreviews[2].image?.tiffRepresentation)
+        XCTAssertNotEqual(logo, classic)
+        XCTAssertTrue(controller.iconPreviews.allSatisfy { $0.image != nil })
+        controller.saveButton.performClick(nil)
+        XCTAssertEqual(saved?.iconStyle, .classic)
+    }
+
+    func testIconStylePreferencePersistsAndFallsBack() {
+        let suite = "MacDeckMenuBarUITests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(MenuBarIconStyle.load(from: defaults), .logo)
+        MenuBarIconStyle.classic.save(to: defaults)
+        XCTAssertEqual(MenuBarIconStyle.load(from: defaults), .classic)
+        defaults.set("unknown", forKey: "menuBarIconStyle")
+        XCTAssertEqual(MenuBarIconStyle.load(from: defaults), .logo)
+    }
     func testFirstSettingsPresentationCentersTheWindow() throws {
         let controller = SettingsWindowController()
         let window = try XCTUnwrap(controller.window)
@@ -258,39 +289,39 @@ final class SettingsWindowControllerTests: XCTestCase {
         ]
         for (status, description) in expectedDescriptions {
             let image = MenuBarDeckIcon.image(for: status)
-            XCTAssertTrue(image.isTemplate)
+            XCTAssertEqual(image.isTemplate, status != .remote)
             XCTAssertEqual(image.accessibilityDescription, description)
-            XCTAssertEqual(image.size.width, 20)
-            XCTAssertEqual(image.size.height, 20)
+            XCTAssertEqual(image.size.width, 22)
+            XCTAssertEqual(image.size.height, 22)
         }
 
-        XCTAssertEqual(
+        XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .local).tiffRepresentation,
             MenuBarDeckIcon.image(for: .connecting).tiffRepresentation,
-            "The first CONNECTING frame intentionally starts with zero dots."
+            "Connecting begins with a dimmed filled center."
         )
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .local).tiffRepresentation,
             MenuBarDeckIcon.image(for: .remote).tiffRepresentation,
             "REMOTE must render a visibly captured keyboard state."
         )
-        XCTAssertFalse(MenuBarDeckIcon.remoteAccent().isTemplate)
-        XCTAssertEqual(MenuBarDeckIcon.remoteAccent().size, NSSize(width: 20, height: 20))
-        XCTAssertEqual(MenuBarDeckIcon.connectingFrameCount, 4)
+
+        let remote = MenuBarDeckIcon.image(for: .remote, isDark: true)
+        let bitmap = NSBitmapImageRep(data: remote.tiffRepresentation!)!
+        let colors = (0..<bitmap.pixelsWide).flatMap { x in
+            (0..<bitmap.pixelsHigh).compactMap { y in bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) }
+        }
+        XCTAssertTrue(colors.contains { $0.blueComponent > 0.8 && $0.greenComponent > 0.3 && $0.redComponent < 0.3 && $0.alphaComponent > 0.5 }, "The blue center must be part of the single remote image.")
+        XCTAssertNotEqual(remote.tiffRepresentation, MenuBarDeckIcon.image(for: .remote, isDark: false).tiffRepresentation)
+        XCTAssertEqual(MenuBarDeckIcon.connectingFrameCount, 42)
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 0).tiffRepresentation,
-            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 1).tiffRepresentation,
-            "Connecting animation must begin with an empty display, then show one dot."
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 21).tiffRepresentation,
+            "The connecting center pulses between dim and full."
         )
         XCTAssertNotEqual(
-            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 1).tiffRepresentation,
-            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 2).tiffRepresentation,
-            "Connecting animation must progress to its largest dot."
-        )
-        XCTAssertNotEqual(
-            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 2).tiffRepresentation,
-            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 3).tiffRepresentation,
-            "Connecting animation must visibly return toward its initial state."
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 10).tiffRepresentation,
+            MenuBarDeckIcon.image(for: .connecting, connectingPhase: 21).tiffRepresentation
         )
     }
 

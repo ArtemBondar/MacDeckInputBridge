@@ -23,21 +23,26 @@ struct MacDeckMenuBarApp: App {
         MenuBarExtra {
             MenuContentView(model: model)
         } label: {
-            ZStack {
-                Image(nsImage: MenuBarDeckIcon.image(
-                    for: model.status.presentationStatus,
-                    connectingPhase: model.connectionAnimationPhase
-                ))
-                .renderingMode(.template)
-                if model.status.presentationStatus == .remote {
-                    Image(nsImage: MenuBarDeckIcon.remoteAccent())
-                        .renderingMode(.original)
-                        .accessibilityHidden(true)
-                }
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(model.status.title)
+            MenuBarIconLabel(status: model.status, phase: model.connectionAnimationPhase, style: model.iconStyle)
         }
+    }
+}
+
+private struct MenuBarIconLabel: View {
+    let status: SenderStatus
+    let phase: Int
+    let style: MenuBarIconStyle
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Image(nsImage: MenuBarDeckIcon.image(
+            for: status.presentationStatus,
+            connectingPhase: phase,
+            isDark: colorScheme == .dark,
+            style: style
+        ))
+        .renderingMode(style == .logo && status.presentationStatus == .remote ? .original : .template)
+        .accessibilityLabel(status.title)
     }
 }
 
@@ -46,6 +51,7 @@ private final class MenuBarModel: ObservableObject {
     @Published var host: String
     @Published var port: String
     @Published var pairingSecret: String
+    @Published var iconStyle: MenuBarIconStyle
     @Published var showInDock: Bool
     @Published var allowLocalSecretFallback: Bool
     @Published var syncClipboardFromMac: Bool
@@ -65,6 +71,7 @@ private final class MenuBarModel: ObservableObject {
         let settings = store.loadSettings()
         host = settings.host
         port = String(settings.port)
+        iconStyle = MenuBarIconStyle.load()
         showInDock = DockVisibilityPreference.load()
         allowLocalSecretFallback = store.allowsLocalSecretFallback
         syncClipboardFromMac = settings.syncClipboardFromMac
@@ -171,6 +178,7 @@ private final class MenuBarModel: ObservableObject {
                 port: port,
                 pairingSecret: pairingSecret,
                 showInDock: showInDock,
+                iconStyle: iconStyle,
                 allowLocalSecretFallback: allowLocalSecretFallback,
                 syncClipboardFromMac: syncClipboardFromMac,
                 syncClipboardFromDeck: syncClipboardFromDeck,
@@ -196,6 +204,8 @@ private final class MenuBarModel: ObservableObject {
             try store.setAllowsLocalSecretFallback(allowLocalSecretFallback)
             let persistence = try store.savePairingSecret(pairingSecret)
             DockVisibilityPreference.save(showInDock: showInDock)
+            iconStyle = draft.iconStyle
+            iconStyle.save()
             message = switch persistence {
             case .keychain:
                 "Saved. The next toggle will use these settings."
@@ -234,11 +244,13 @@ private final class MenuBarModel: ObservableObject {
     private func startConnectionAnimation() {
         guard connectionAnimationTimer == nil else { return }
         connectionAnimationPhase = 0
-        connectionAnimationTimer = Timer.scheduledTimer(withTimeInterval: 0.32, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: MenuBarDeckIcon.connectingFrameInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.advanceConnectionAnimation()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        connectionAnimationTimer = timer
     }
 
     private func advanceConnectionAnimation() {
