@@ -66,6 +66,7 @@ fi
 mkdir -p "$applications_root"
 mkdir -p "$fallback_icons_root"
 install -m 644 "$tray_icon" "$fallback_icons_root/mac-deck-input-bridge-tray-symbolic.svg"
+install -m 644 "$receiver_root/resources/mac-deck-input-bridge-tray-active-symbolic.svg" "$fallback_icons_root/mac-deck-input-bridge-tray-active-symbolic.svg"
 sed -e "s|@MAC_DECK_RECEIVER_UI@|$bin_root/mac-deck-receiver-ui|" \
   "$receiver_root/resources/mac-deck-input-bridge.desktop" \
   > "$applications_root/mac-deck-input-bridge.desktop"

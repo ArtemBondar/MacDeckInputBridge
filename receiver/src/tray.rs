@@ -34,10 +34,12 @@ impl ksni::Tray for Tray {
         "mac-deck-input-bridge".into()
     }
     fn icon_name(&self) -> String {
-        "mac-deck-input-bridge-tray-symbolic".into()
-    }
-    fn overlay_icon_name(&self) -> String {
-        if self.running { "emblem-default" } else { "" }.into()
+        if self.running {
+            "mac-deck-input-bridge-tray-active-symbolic"
+        } else {
+            "mac-deck-input-bridge-tray-symbolic"
+        }
+        .into()
     }
     fn title(&self) -> String {
         "MacDeck".into()
@@ -66,12 +68,6 @@ impl ksni::Tray for Tray {
     }
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         vec![
-            StandardItem {
-                label: "Open MacDeck".into(),
-                activate: Box::new(|tray: &mut Self| tray.send(Action::Show)),
-                ..Default::default()
-            }
-            .into(),
             StandardItem {
                 label: "Settings…".into(),
                 activate: Box::new(|tray: &mut Self| tray.send(Action::Settings)),
@@ -215,11 +211,14 @@ mod tests {
             clipboard_enabled: true,
         };
         let menu = tray.menu();
-        let ksni::MenuItem::Standard(toggle) = &menu[3] else {
+        assert_eq!(tray.icon_name(), "mac-deck-input-bridge-tray-symbolic");
+        tray.activate(0, 0);
+        assert_eq!(actions.try_recv(), Ok(Action::Show));
+        let ksni::MenuItem::Standard(toggle) = &menu[2] else {
             panic!("toggle missing")
         };
         assert_eq!(toggle.label, "Enable Mac input");
-        let ksni::MenuItem::Standard(send) = &menu[4] else {
+        let ksni::MenuItem::Standard(send) = &menu[3] else {
             panic!("clipboard action missing")
         };
         assert!(!send.enabled);
@@ -227,11 +226,15 @@ mod tests {
         assert_eq!(actions.try_recv(), Ok(Action::Toggle));
 
         tray.running = true;
+        assert_eq!(
+            tray.icon_name(),
+            "mac-deck-input-bridge-tray-active-symbolic"
+        );
         let menu = tray.menu();
-        let ksni::MenuItem::Standard(toggle) = &menu[3] else {
+        let ksni::MenuItem::Standard(toggle) = &menu[2] else {
             panic!("toggle missing")
         };
-        let ksni::MenuItem::Standard(send) = &menu[4] else {
+        let ksni::MenuItem::Standard(send) = &menu[3] else {
             panic!("clipboard action missing")
         };
         assert_eq!(toggle.label, "Disable Mac input");

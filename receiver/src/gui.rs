@@ -1013,6 +1013,10 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
                     context.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                     self.hidden_to_tray = true;
                 }
+                // Minimize to the tray instead of leaving a second taskbar
+                // entry. Only do this when the tray can restore the window.
+                let available = tray.available();
+                self.hide_minimized_to_tray(context, available, tray_window_can_hide());
             }
             if self.hidden_to_tray {
                 context.request_repaint_after(HIDDEN_TRAY_HEALTH_CHECK);
@@ -1103,6 +1107,21 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
         // a display-frame rate.
         if self.process.is_running() {
             context.request_repaint_after(Duration::from_secs(1));
+        }
+    }
+}
+
+#[cfg(unix)]
+impl<P: ReceiverSupervisor> ReceiverApp<P> {
+    fn hide_minimized_to_tray(&mut self, context: &egui::Context, available: bool, can_hide: bool) {
+        if context.input(|input| input.viewport().minimized == Some(true))
+            && available
+            && can_hide
+            && !self.quitting
+            && !self.hidden_to_tray
+        {
+            context.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.hidden_to_tray = true;
         }
     }
 }
@@ -1468,6 +1487,43 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| matches!(command, egui::ViewportCommand::Focus)));
+        assert_eq!(app.selected_tab, Tab::Settings);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn minimize_hides_only_when_tray_can_restore_window() {
+        let directory = unique_test_directory("tray-minimize");
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            directory.join(CONFIG_FILE),
+            FakeReceiverProcess::default(),
+        );
+        let context = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .minimized = Some(true);
+        let output = context.run(input.clone(), |ctx| {
+            app.hide_minimized_to_tray(ctx, false, true)
+        });
+        assert!(!app.hidden_to_tray);
+        assert!(!output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .iter()
+            .any(|cmd| matches!(cmd, egui::ViewportCommand::Visible(false))));
+        let output = context.run(input, |ctx| app.hide_minimized_to_tray(ctx, true, true));
+        assert!(app.hidden_to_tray);
+        assert!(output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .iter()
+            .any(|cmd| matches!(cmd, egui::ViewportCommand::Visible(false))));
+        let _ = context.run(egui::RawInput::default(), |ctx| {
+            app.handle_tray_action(ctx, tray::Action::Settings)
+        });
+        assert!(!app.hidden_to_tray);
         assert_eq!(app.selected_tab, Tab::Settings);
     }
 

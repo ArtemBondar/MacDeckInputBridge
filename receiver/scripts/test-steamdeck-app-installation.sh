@@ -55,6 +55,7 @@ test -x "$bin_root/mac-deck-receiver-ui"
 test -f "$applications_root/mac-deck-input-bridge.desktop"
 test -f "$pixmaps_root/mac-deck-input-bridge.png"
 test -f "$fallback_icons_root/mac-deck-input-bridge-tray-symbolic.svg"
+test -f "$fallback_icons_root/mac-deck-input-bridge-tray-active-symbolic.svg"
 grep -F "Exec=$bin_root/mac-deck-receiver-ui" \
   "$applications_root/mac-deck-input-bridge.desktop" >/dev/null
 
@@ -64,6 +65,7 @@ test ! -e "$bin_root/mac-deck-receiver-ui"
 test ! -e "$applications_root/mac-deck-input-bridge.desktop"
 test ! -e "$pixmaps_root/mac-deck-input-bridge.png"
 test ! -e "$fallback_icons_root/mac-deck-input-bridge-tray-symbolic.svg"
+test ! -e "$fallback_icons_root/mac-deck-input-bridge-tray-active-symbolic.svg"
 test -f "$config_root/receiver.toml"
 
 grep -F "xdg-icon-resource uninstall" "$log_file" >/dev/null
