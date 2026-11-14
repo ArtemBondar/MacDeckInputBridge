@@ -177,6 +177,10 @@ mod tests {
                 .output()
                 .is_err()
             {
+                assert!(
+                    !cfg!(target_os = "linux") || std::env::var_os("CI").is_none(),
+                    "dbus-run-session is required to verify notifications in Linux CI"
+                );
                 eprintln!(
                     "dbus-run-session unavailable; notification protocol integration test skipped"
                 );
