@@ -8,11 +8,12 @@
   <title>MacDeck — one keyboard, two devices</title>
   <link rel="icon" href="icon.png">
   <link rel="stylesheet" href="style.css">
+  <script>try{const t=localStorage.getItem('theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
 <body>
   <header class="header wrap">
     <a class="brand" href="#top"><img src="icon.png" alt="" width="36" height="36"><span>MacDeck</span></a>
-    <nav aria-label="Main navigation"><a href="#how-it-works">How it works</a><a href="#setup">Setup</a><a href="https://github.com/ArtemBondar/MacDeckInputBridge">GitHub ↗</a></nav>
+    <nav aria-label="Main navigation"><a href="#how-it-works">How it works</a><a href="#setup">Setup</a><a href="https://github.com/ArtemBondar/MacDeckInputBridge">GitHub ↗</a><button class="theme-toggle" type="button" aria-label="Change color theme">Theme: System</button></nav>
   </header>
   <main id="top">
     <section class="hero wrap" aria-labelledby="hero-title">
@@ -41,5 +42,6 @@
     <section class="end wrap"><div><p class="eyebrow">READY WHEN YOU ARE</p><h2>Make room for<br><em>one more screen.</em></h2></div><a class="button primary" href="https://github.com/ArtemBondar/MacDeckInputBridge/releases/latest">Download the apps <span aria-hidden="true">↗</span></a></section>
   </main>
   <footer class="wrap footer"><a class="brand" href="#top"><img src="icon.png" alt="" width="32" height="32"><span>MacDeck</span></a><p>Built for the space between Mac and Steam Deck.</p><a href="https://github.com/ArtemBondar/MacDeckInputBridge">View on GitHub ↗</a></footer>
+<script>(()=>{const b=document.querySelector('.theme-toggle'),m=matchMedia('(prefers-color-scheme: dark)');function update(){let t=document.documentElement.dataset.theme;b.textContent='Theme: '+(t?t[0].toUpperCase()+t.slice(1):'System');b.setAttribute('aria-label','Color theme: '+(t||'system')+'. Change theme')}b.addEventListener('click',()=>{let t=document.documentElement.dataset.theme;let n=!t?(m.matches?'light':'dark'):t==='dark'?'light':null;if(n)document.documentElement.dataset.theme=n;else delete document.documentElement.dataset.theme;try{if(n)localStorage.setItem('theme',n);else localStorage.removeItem('theme')}catch(e){}update()});update()})();</script>
 </body>
 </html>
