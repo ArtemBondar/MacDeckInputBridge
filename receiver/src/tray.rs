@@ -34,7 +34,7 @@ impl ksni::Tray for Tray {
         "mac-deck-input-bridge".into()
     }
     fn icon_name(&self) -> String {
-        "mac-deck-input-bridge".into()
+        "mac-deck-input-bridge-tray-symbolic".into()
     }
     fn overlay_icon_name(&self) -> String {
         if self.running { "emblem-default" } else { "" }.into()

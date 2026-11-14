@@ -559,6 +559,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
                     Tab::Control
                 };
                 context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                context.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 context.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             tray::Action::Toggle => {
@@ -582,6 +583,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
                     "System tray unavailable. Use the MacDeck window to control input.".into(),
                 );
                 context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                context.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             }
             tray::Action::Online => {}
         }
@@ -600,6 +602,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             self.hidden_to_tray = false;
             self.status = Some(message.to_owned());
             context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            context.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         }
     }
 
@@ -1004,6 +1007,7 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
                 if context.input(|input| input.viewport().close_requested())
                     && tray.available()
                     && !self.quitting
+                    && tray_window_can_hide()
                 {
                     context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                     context.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -1101,6 +1105,28 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
             context.request_repaint_after(Duration::from_secs(1));
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn tray_window_can_hide() -> bool {
+    use std::sync::OnceLock;
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        tray_window_can_hide_for(
+            controller_navigation_enabled(),
+            env::var_os("DISPLAY").is_some(),
+        ) && x11rb::connect(None).is_ok()
+    })
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn tray_window_can_hide() -> bool {
+    false
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn tray_window_can_hide_for(gaming_mode: bool, has_x11_display: bool) -> bool {
+    !gaming_mode && has_x11_display
 }
 
 fn receiver_executable() -> Result<PathBuf, String> {
@@ -1296,6 +1322,10 @@ fn local_ipv4_addresses_from(interfaces: impl IntoIterator<Item = Interface>) ->
 }
 
 fn main() -> eframe::Result<()> {
+    // Winit's Wayland backend cannot hide or restore a window. Desktop Plasma
+    // normally provides XWayland; use it for this UI when available so that
+    // the tray can restore both hidden and minimized windows. Do not alter
+    // Gaming Mode. Wayland remains available to the clipboard receiver.
     // Wayland needs both a window icon and an application ID that matches the
     // desktop file. Without them Plasma uses eframe's default icon in the
     // task manager even when the launcher itself has a correctly installed
@@ -1317,10 +1347,18 @@ fn main() -> eframe::Result<()> {
             viewport
         }
     };
-    let options = eframe::NativeOptions {
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions {
         viewport,
         ..Default::default()
     };
+    #[cfg(target_os = "linux")]
+    if tray_window_can_hide() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        options.event_loop_builder = Some(Box::new(|builder| {
+            builder.with_x11();
+        }));
+    }
     eframe::run_native(
         APP_NAME,
         options,
@@ -1332,6 +1370,13 @@ fn main() -> eframe::Result<()> {
 mod tests {
     use super::*;
     use get_if_addrs::Ifv4Addr;
+
+    #[test]
+    fn tray_window_backend_requires_desktop_mode_and_an_x11_display() {
+        assert!(tray_window_can_hide_for(false, true));
+        assert!(!tray_window_can_hide_for(false, false));
+        assert!(!tray_window_can_hide_for(true, true));
+    }
 
     #[derive(Default)]
     struct FakeReceiverProcess {
@@ -1398,6 +1443,32 @@ mod tests {
         app.handle_tray_action(&context, tray::Action::Quit);
         assert!(app.quitting);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tray_settings_requests_unminimize_and_focus() {
+        let directory = unique_test_directory("tray-settings-restore");
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            directory.join(CONFIG_FILE),
+            FakeReceiverProcess::default(),
+        );
+        let context = egui::Context::default();
+        let output = context.run(egui::RawInput::default(), |ctx| {
+            app.handle_tray_action(ctx, tray::Action::Settings);
+        });
+        let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
+        assert!(commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::Minimized(false))));
+        assert!(commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::Visible(true))));
+        assert!(commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::Focus)));
+        assert_eq!(app.selected_tab, Tab::Settings);
     }
 
     #[cfg(unix)]

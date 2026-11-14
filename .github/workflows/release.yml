@@ -103,6 +103,7 @@ jobs:
           install -m 755 receiver/scripts/uninstall-steamdeck-app.sh "$package/receiver/scripts/"
           install -m 644 receiver/resources/mac-deck-input-bridge.desktop "$package/receiver/resources/"
           install -m 644 receiver/resources/mac-deck-input-bridge.svg "$package/receiver/resources/"
+          install -m 644 receiver/resources/mac-deck-input-bridge-tray-symbolic.svg "$package/receiver/resources/"
           install -m 644 assets/MacDeckInputBridgeIcon.png \
             "$package/receiver/resources/mac-deck-input-bridge.png"
           install -m 644 docs/STEAMDECK_APP.md "$package/README.md"

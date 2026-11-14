@@ -1730,7 +1730,9 @@ dependencies = [
  "sha2",
  "thiserror 1.0.69",
  "toml",
+ "winit",
  "wl-clipboard-rs",
+ "x11rb",
  "zbus",
 ]
 

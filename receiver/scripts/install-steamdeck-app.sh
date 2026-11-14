@@ -18,6 +18,7 @@ bundled_icon="$receiver_root/resources/mac-deck-input-bridge.png"
 source_checkout_icon="$project_root/assets/MacDeckInputBridgeIcon.png"
 icon_source=${MAC_DECK_ICON_SOURCE:-"$bundled_icon"}
 fallback_icon="$receiver_root/resources/mac-deck-input-bridge.svg"
+tray_icon="$receiver_root/resources/mac-deck-input-bridge-tray-symbolic.svg"
 
 # A release archive intentionally ships prebuilt binaries and has no Cargo
 # manifest. A source checkout does have one, so compile it before installing:
@@ -63,6 +64,8 @@ else
 fi
 
 mkdir -p "$applications_root"
+mkdir -p "$fallback_icons_root"
+install -m 644 "$tray_icon" "$fallback_icons_root/mac-deck-input-bridge-tray-symbolic.svg"
 sed -e "s|@MAC_DECK_RECEIVER_UI@|$bin_root/mac-deck-receiver-ui|" \
   "$receiver_root/resources/mac-deck-input-bridge.desktop" \
   > "$applications_root/mac-deck-input-bridge.desktop"
