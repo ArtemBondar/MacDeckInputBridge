@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Output, Stdio},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -84,12 +84,12 @@ const MAX_PENDING_CLIPBOARD_ECHOES: usize = 256;
 
 #[derive(Default)]
 struct ClipboardEchoSuppression {
-    pending: VecDeque<[u8; 32]>,
+    pending: VecDeque<(u64, [u8; 32])>,
     overflowed: bool,
 }
 
 impl ClipboardEchoSuppression {
-    fn record_applied(&mut self, text: &str) -> bool {
+    fn record_applied(&mut self, text: &str, generation: u64) -> bool {
         if self.overflowed {
             return false;
         }
@@ -100,10 +100,10 @@ impl ClipboardEchoSuppression {
             return true;
         }
         self.pending
-            .push_back(Sha256::digest(text.as_bytes()).into());
+            .push_back((generation, Sha256::digest(text.as_bytes()).into()));
         false
     }
-    fn should_skip(&mut self, text: &str, explicit: bool) -> bool {
+    fn should_skip(&mut self, text: &str, explicit: bool, observed_generation: u64) -> bool {
         if explicit {
             return false;
         }
@@ -111,11 +111,9 @@ impl ClipboardEchoSuppression {
             return true;
         }
         let fingerprint: [u8; 32] = Sha256::digest(text.as_bytes()).into();
-        if let Some(index) = self
-            .pending
-            .iter()
-            .position(|pending| *pending == fingerprint)
-        {
+        if let Some(index) = self.pending.iter().rposition(|(generation, pending)| {
+            *generation <= observed_generation && *pending == fingerprint
+        }) {
             // The watcher observes offers in order; earlier, coalesced offers
             // can no longer arrive after the matched observation.
             self.pending.drain(..=index);
@@ -407,6 +405,7 @@ fn handle_authenticated_client(
     let mut clipboard_sink = clipboard_sink;
     let mut watcher: Option<clipboard_watch::ClipboardWatcher> = None;
     let mut suppression = ClipboardEchoSuppression::default();
+    let applied_generation = Arc::new(AtomicU64::new(0));
     let mut transfer_id = 0u64;
     manual_clipboard_request.store(false, Ordering::Release);
     let mut watcher_ready = false;
@@ -456,11 +455,11 @@ fn handle_authenticated_client(
                 .checked_add(1)
                 .ok_or(BridgeError::Handshake)?;
         }
-        if let Some((text, explicit)) = watcher
+        if let Some((text, explicit, observed_generation)) = watcher
             .as_ref()
             .and_then(|watcher| watcher.take_text(watcher_ready))
         {
-            if !suppression.should_skip(&text, explicit) {
+            if !suppression.should_skip(&text, explicit, observed_generation) {
                 transfer_id = transfer_id.checked_add(1).ok_or(BridgeError::Handshake)?;
                 let bytes = text.as_bytes();
                 let count = bytes.len().div_ceil(MAX_CLIPBOARD_CHUNK_BYTES);
@@ -564,21 +563,27 @@ fn handle_authenticated_client(
                     .ok_or(BridgeError::InvalidPacket)?
                     .finish(transfer_id)?;
                 let delivery = match clipboard_sink.as_deref_mut() {
-                    Some(sink) => match sink.set_text(&text) {
-                        Ok(()) => {
-                            eprintln!("Steam Deck clipboard updated from Mac.");
-                            if allow_clipboard_to_mac && suppression.record_applied(&text) {
-                                eprintln!("Steam Deck clipboard tracking is full. Reconnect to restore automatic sharing.");
+                    Some(sink) => {
+                        // Publish before the clipboard offer can be observed.
+                        let generation = applied_generation.fetch_add(1, Ordering::AcqRel) + 1;
+                        match sink.set_text(&text) {
+                            Ok(()) => {
+                                eprintln!("Steam Deck clipboard updated from Mac.");
+                                if allow_clipboard_to_mac
+                                    && suppression.record_applied(&text, generation)
+                                {
+                                    eprintln!("Steam Deck clipboard tracking is full. Reconnect to restore automatic sharing.");
+                                }
+                                ClipboardDelivery::Written
                             }
-                            ClipboardDelivery::Written
+                            Err(error) => {
+                                // Clipboard support is optional. A compositor failure must not
+                                // terminate keyboard forwarding or expose copied content.
+                                eprintln!("Could not update the Steam Deck clipboard: {error}");
+                                ClipboardDelivery::Failed
+                            }
                         }
-                        Err(error) => {
-                            // Clipboard support is optional. A compositor failure must not
-                            // terminate keyboard forwarding or expose copied content.
-                            eprintln!("Could not update the Steam Deck clipboard: {error}");
-                            ClipboardDelivery::Failed
-                        }
-                    },
+                    }
                     None => ClipboardDelivery::Unavailable,
                 };
                 session.write_packet(
@@ -622,7 +627,9 @@ fn handle_authenticated_client(
             Packet::Ping => {
                 let allowed = allow_clipboard_to_mac && WaylandClipboardSink::new().is_ok();
                 if allowed && watcher.is_none() {
-                    watcher = Some(clipboard_watch::ClipboardWatcher::start());
+                    watcher = Some(clipboard_watch::ClipboardWatcher::start(Arc::clone(
+                        &applied_generation,
+                    )));
                 } else if !allowed {
                     session.write_packet(
                         &mut response_stream,
@@ -1655,42 +1662,59 @@ mod receiver_tests {
     #[test]
     fn remote_clipboard_echo_is_suppressed_without_suppressing_local_changes() {
         let mut suppression = ClipboardEchoSuppression::default();
-        suppression.record_applied("remote");
-        assert!(suppression.should_skip("remote", false));
-        assert!(!suppression.should_skip("remote", false));
-        suppression.record_applied("remote");
-        assert!(!suppression.should_skip("local", false));
-        assert!(suppression.should_skip("remote", false));
-        suppression.record_applied("remote");
-        assert!(!suppression.should_skip("remote", true));
-        assert!(suppression.should_skip("remote", false));
+        suppression.record_applied("remote", 1);
+        assert!(suppression.should_skip("remote", false, 1));
+        assert!(!suppression.should_skip("remote", false, 1));
+        suppression.record_applied("remote", 2);
+        assert!(!suppression.should_skip("local", false, 2));
+        assert!(suppression.should_skip("remote", false, 2));
+        suppression.record_applied("remote", 3);
+        assert!(!suppression.should_skip("remote", true, 3));
+        assert!(suppression.should_skip("remote", false, 3));
     }
 
     #[test]
     fn delayed_remote_observations_do_not_echo_or_consume_newer_markers() {
         let mut suppression = ClipboardEchoSuppression::default();
-        suppression.record_applied("older");
-        suppression.record_applied("newer");
-        assert!(suppression.should_skip("older", false));
-        assert!(suppression.should_skip("newer", false));
-        assert!(!suppression.should_skip("local", false));
+        suppression.record_applied("older", 1);
+        suppression.record_applied("newer", 2);
+        assert!(suppression.should_skip("older", false, 1));
+        assert!(suppression.should_skip("newer", false, 2));
+        assert!(!suppression.should_skip("local", false, 2));
 
-        suppression.record_applied("coalesced");
-        suppression.record_applied("visible");
-        assert!(suppression.should_skip("visible", false));
-        assert!(!suppression.should_skip("coalesced", false));
+        suppression.record_applied("coalesced", 3);
+        suppression.record_applied("visible", 4);
+        assert!(suppression.should_skip("visible", false, 4));
+        assert!(!suppression.should_skip("coalesced", false, 4));
+    }
+
+    #[test]
+    fn duplicate_coalesced_updates_retire_stale_markers_without_losing_in_flight_updates() {
+        let mut suppression = ClipboardEchoSuppression::default();
+        suppression.record_applied("A", 1);
+        suppression.record_applied("B", 2);
+        suppression.record_applied("A", 3);
+        assert!(suppression.should_skip("A", false, 3));
+        assert!(!suppression.should_skip("B", false, 3));
+
+        suppression.record_applied("A", 4);
+        suppression.record_applied("B", 5);
+        suppression.record_applied("A", 6);
+        assert!(suppression.should_skip("A", false, 4));
+        assert!(suppression.should_skip("B", false, 5));
+        assert!(suppression.should_skip("A", false, 6));
     }
 
     #[test]
     fn full_echo_tracking_fails_closed_but_allows_explicit_sends() {
         let mut suppression = ClipboardEchoSuppression::default();
         for _ in 0..MAX_PENDING_CLIPBOARD_ECHOES {
-            assert!(!suppression.record_applied("remote"));
+            assert!(!suppression.record_applied("remote", 1));
         }
-        assert!(suppression.record_applied("overflow"));
-        assert!(!suppression.record_applied("later"));
-        assert!(suppression.should_skip("any text", false));
-        assert!(!suppression.should_skip("any text", true));
+        assert!(suppression.record_applied("overflow", 2));
+        assert!(!suppression.record_applied("later", 3));
+        assert!(suppression.should_skip("any text", false, 3));
+        assert!(!suppression.should_skip("any text", true, 3));
     }
 
     #[test]

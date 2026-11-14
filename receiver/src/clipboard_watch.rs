@@ -3,7 +3,7 @@ use std::{
     io::Read,
     os::fd::AsRawFd,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
         Arc, Condvar, Mutex,
     },
@@ -75,7 +75,7 @@ pub struct ClipboardWatcher {
     stop: Arc<AtomicBool>,
     cancel: Arc<Mutex<Option<wl_clipboard_rs::watch::CancelHandle>>>,
     sender: SyncSender<WatchEvent>,
-    pending_text: Arc<Mutex<Option<(String, bool)>>>,
+    pending_text: Arc<Mutex<Option<(String, bool, u64)>>>,
     terminated: Arc<AtomicBool>,
 }
 
@@ -85,7 +85,7 @@ pub enum WatchEvent {
 }
 
 impl ClipboardWatcher {
-    pub fn start() -> Self {
+    pub fn start(applied_generation: Arc<AtomicU64>) -> Self {
         let (sender, events) = mpsc::sync_channel(2);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
@@ -131,6 +131,9 @@ impl ClipboardWatcher {
                     ..
                 } = event
                 {
+                    // Capture progress before reading: clipboard offers can
+                    // block while newer Mac updates are applied.
+                    let observed_generation = applied_generation.load(Ordering::Acquire);
                     let mime = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"]
                         .iter()
                         .find(|candidate| mime_types.iter().any(|item| item == **candidate));
@@ -138,7 +141,7 @@ impl ClipboardWatcher {
                         if let Ok(mut reader) = offer.receive(mime) {
                             if let Some(text) = read_bounded(&mut reader, &worker_stop) {
                                 if let Ok(mut pending) = worker_pending.lock() {
-                                    *pending = Some((text, false));
+                                    *pending = Some((text, false, observed_generation));
                                 }
                             }
                         }
@@ -175,7 +178,7 @@ impl ClipboardWatcher {
             if !stop.load(Ordering::Acquire) {
                 if let Some(text) = text {
                     if let Ok(mut slot) = pending.lock() {
-                        *slot = Some((text, true));
+                        *slot = Some((text, true, 0));
                     }
                 } else {
                     let _ = sender.try_send(WatchEvent::Failed);
@@ -185,7 +188,7 @@ impl ClipboardWatcher {
         });
     }
 
-    pub fn take_text(&self, ready: bool) -> Option<(String, bool)> {
+    pub fn take_text(&self, ready: bool) -> Option<(String, bool, u64)> {
         take_ready_text(&self.pending_text, ready)
     }
 
@@ -194,7 +197,10 @@ impl ClipboardWatcher {
     }
 }
 
-fn take_ready_text(pending: &Mutex<Option<(String, bool)>>, ready: bool) -> Option<(String, bool)> {
+fn take_ready_text(
+    pending: &Mutex<Option<(String, bool, u64)>>,
+    ready: bool,
+) -> Option<(String, bool, u64)> {
     if !ready {
         return None;
     }
@@ -266,11 +272,11 @@ mod tests {
 
     #[test]
     fn pending_text_waits_for_advertised_readiness() {
-        let pending = Mutex::new(Some(("new clipboard".to_owned(), false)));
+        let pending = Mutex::new(Some(("new clipboard".to_owned(), false, 1)));
         assert_eq!(take_ready_text(&pending, false), None);
         assert_eq!(
             take_ready_text(&pending, true),
-            Some(("new clipboard".to_owned(), false))
+            Some(("new clipboard".to_owned(), false, 1))
         );
         assert_eq!(take_ready_text(&pending, true), None);
     }
