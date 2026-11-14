@@ -5,7 +5,7 @@ use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -20,17 +20,53 @@ use mac_deck_receiver::MAX_CLIPBOARD_TEXT_BYTES;
 // A compositor roundtrip can stall inside the clipboard library. Keep at most
 // one explicit read alive across reconnects, even if that happens.
 static MANUAL_READ_ACTIVE: AtomicBool = AtomicBool::new(false);
-static WATCH_ACTIVE: AtomicBool = AtomicBool::new(false);
+static WATCH_SLOT: WatchSlot = WatchSlot::new();
 
 // Bound how long a clipboard owner can hold a transfer open. Polling makes
 // cancellation responsive without busy-waiting while the owner produces data.
 const CLIPBOARD_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const CLIPBOARD_CANCEL_POLL_INTERVAL_MS: libc::c_int = 100;
 
-struct WatchPermit;
-impl Drop for WatchPermit {
+struct WatchSlot {
+    active: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl WatchSlot {
+    const fn new() -> Self {
+        Self {
+            active: Mutex::new(false),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn acquire(&self, stop: &AtomicBool) -> Option<WatchPermit<'_>> {
+        let mut active = self.active.lock().ok()?;
+        while *active && !stop.load(Ordering::Acquire) {
+            active = self.changed.wait(active).ok()?;
+        }
+        if stop.load(Ordering::Acquire) {
+            return None;
+        }
+        *active = true;
+        Some(WatchPermit(self))
+    }
+
+    fn wake_waiters(&self) {
+        // Locking synchronizes cancellation with the check before wait.
+        if let Ok(_active) = self.active.lock() {
+            self.changed.notify_all();
+        }
+    }
+}
+
+struct WatchPermit<'a>(&'a WatchSlot);
+impl Drop for WatchPermit<'_> {
     fn drop(&mut self) {
-        WATCH_ACTIVE.store(false, Ordering::Release);
+        if let Ok(mut active) = self.0.active.lock() {
+            *active = false;
+            self.0.changed.notify_all();
+        }
     }
 }
 
@@ -61,11 +97,11 @@ impl ClipboardWatcher {
         let cancel = Arc::new(Mutex::new(None));
         let worker_cancel = Arc::clone(&cancel);
         thread::spawn(move || {
-            if WATCH_ACTIVE.swap(true, Ordering::AcqRel) {
-                let _ = worker_sender.try_send(WatchEvent::Ready(false));
+            // A previous session may still be stopping. Wait for its permit
+            // rather than permanently reporting an unsupported clipboard.
+            let Some(_permit) = WATCH_SLOT.acquire(&worker_stop) else {
                 return;
-            }
-            let _permit = WatchPermit;
+            };
             let Ok(mut watcher) = Watcher::new(ClipboardType::Regular, Seat::Unspecified) else {
                 let _ = worker_sender.try_send(WatchEvent::Ready(false));
                 return;
@@ -149,8 +185,8 @@ impl ClipboardWatcher {
         });
     }
 
-    pub fn take_text(&self) -> Option<(String, bool)> {
-        self.pending_text.lock().ok()?.take()
+    pub fn take_text(&self, ready: bool) -> Option<(String, bool)> {
+        take_ready_text(&self.pending_text, ready)
     }
 
     pub fn terminated(&self) -> bool {
@@ -158,9 +194,17 @@ impl ClipboardWatcher {
     }
 }
 
+fn take_ready_text(pending: &Mutex<Option<(String, bool)>>, ready: bool) -> Option<(String, bool)> {
+    if !ready {
+        return None;
+    }
+    pending.lock().ok()?.take()
+}
+
 impl Drop for ClipboardWatcher {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        WATCH_SLOT.wake_waiters();
         if let Ok(mut handle) = self.cancel.lock() {
             if let Some(cancel) = handle.take() {
                 cancel.cancel();
@@ -219,6 +263,55 @@ impl<T: Read + AsRawFd> ReadFd for T {
 mod tests {
     use super::*;
     use std::{io::Write, os::unix::net::UnixStream, sync::mpsc};
+
+    #[test]
+    fn pending_text_waits_for_advertised_readiness() {
+        let pending = Mutex::new(Some(("new clipboard".to_owned(), false)));
+        assert_eq!(take_ready_text(&pending, false), None);
+        assert_eq!(
+            take_ready_text(&pending, true),
+            Some(("new clipboard".to_owned(), false))
+        );
+        assert_eq!(take_ready_text(&pending, true), None);
+    }
+
+    #[test]
+    fn reconnect_waits_for_previous_watcher_and_can_cancel() {
+        let slot = Arc::new(WatchSlot::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let permit = slot.acquire(&stop).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let worker_slot = Arc::clone(&slot);
+        let worker_stop = Arc::clone(&stop);
+        let worker = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let acquired = worker_slot.acquire(&worker_stop).is_some();
+            result_tx.send(acquired).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(result_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        drop(permit);
+        assert!(result_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        worker.join().unwrap();
+
+        let permit = slot.acquire(&stop).unwrap();
+        let worker_slot = Arc::clone(&slot);
+        let worker_stop = Arc::clone(&stop);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let acquired = worker_slot.acquire(&worker_stop).is_some();
+            result_tx.send(acquired).unwrap();
+        });
+        started_rx.recv().unwrap();
+        stop.store(true, Ordering::Release);
+        slot.wake_waiters();
+        assert!(!result_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        drop(permit);
+        worker.join().unwrap();
+    }
 
     struct SignalBlockedRead {
         stream: UnixStream,

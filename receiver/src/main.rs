@@ -420,7 +420,10 @@ fn handle_authenticated_client(
                 .checked_add(1)
                 .ok_or(BridgeError::Handshake)?;
         }
-        if let Some((text, explicit)) = watcher.as_ref().and_then(|watcher| watcher.take_text()) {
+        if let Some((text, explicit)) = watcher
+            .as_ref()
+            .and_then(|watcher| watcher.take_text(watcher_ready))
+        {
             if !suppression.should_skip(&text, explicit) {
                 transfer_id = transfer_id.checked_add(1).ok_or(BridgeError::Handshake)?;
                 let bytes = text.as_bytes();
