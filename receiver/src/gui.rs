@@ -276,7 +276,7 @@ struct ReceiverApp<P = ReceiverProcess> {
     restoring_from_tray: bool,
     #[cfg(unix)]
     notifications: notification::NotificationBridge,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", test))]
     taskbar_hidden: Option<bool>,
 }
 
@@ -554,7 +554,7 @@ impl ReceiverApp<ReceiverProcess> {
             restoring_from_tray: false,
             #[cfg(unix)]
             notifications: notification::NotificationBridge::default(),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", test))]
             taskbar_hidden: None,
         }
     }
@@ -664,7 +664,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             restoring_from_tray: false,
             #[cfg(unix)]
             notifications: notification::NotificationBridge::default(),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", test))]
             taskbar_hidden: None,
         }
     }
@@ -1033,7 +1033,7 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
             {
                 let desired = self.settings.hide_taskbar_when_tray_available
                     && self.tray.as_ref().is_some_and(tray::TrayBridge::available);
-                if self.taskbar_hidden != Some(desired) {
+                if !self.hidden_to_tray && self.taskbar_hidden != Some(desired) {
                     match set_taskbar_visibility(_frame, desired) {
                         Ok(()) => self.taskbar_hidden = Some(desired),
                         Err(()) => {
@@ -1059,6 +1059,10 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
                     context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                     context.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                     self.hidden_to_tray = true;
+                    #[cfg(any(target_os = "linux", test))]
+                    {
+                        self.taskbar_hidden = None;
+                    }
                 }
                 // Minimize to the tray instead of leaving a second taskbar
                 // entry. Only do this when the tray can restore the window.
@@ -1167,6 +1171,13 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         if self.restoring_from_tray {
             if minimized == Some(false) {
                 self.restoring_from_tray = false;
+                // Reapply after the window manager has mapped the restored
+                // window; it can discard state when the window is withdrawn.
+                #[cfg(any(target_os = "linux", test))]
+                {
+                    self.taskbar_hidden = None;
+                    context.request_repaint();
+                }
             }
             return;
         }
@@ -1178,6 +1189,10 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         {
             context.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             self.hidden_to_tray = true;
+            #[cfg(any(target_os = "linux", test))]
+            {
+                self.taskbar_hidden = None;
+            }
         }
     }
 }
@@ -1187,7 +1202,10 @@ fn set_taskbar_visibility(frame: &eframe::Frame, hidden: bool) -> Result<(), ()>
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use x11rb::{
         connection::Connection,
-        protocol::xproto::{ClientMessageEvent, ConnectionExt, EventMask},
+        protocol::xproto::{
+            AtomEnum, ClientMessageEvent, ConnectionExt, EventMask, MapState, PropMode,
+        },
+        wrapper::ConnectionExt as _,
     };
     let RawWindowHandle::Xlib(handle) = frame.window_handle().map_err(|_| ())?.as_raw() else {
         return Err(());
@@ -1207,6 +1225,33 @@ fn set_taskbar_visibility(frame: &eframe::Frame, hidden: bool) -> Result<(), ()>
         .reply()
         .map_err(|_| ())?
         .atom;
+    let attributes = connection
+        .get_window_attributes(window)
+        .map_err(|_| ())?
+        .reply()
+        .map_err(|_| ())?;
+    if attributes.map_state == MapState::UNMAPPED {
+        // EWMH uses initial properties before map, rather than messages to
+        // a window manager that is not currently managing the window.
+        let reply = connection
+            .get_property(false, window, state, AtomEnum::ATOM, 0, 1024)
+            .map_err(|_| ())?
+            .reply()
+            .map_err(|_| ())?;
+        if reply.bytes_after != 0 {
+            return Err(());
+        }
+        let mut atoms: Vec<u32> = reply
+            .value32()
+            .map_or_else(Vec::new, |values| values.collect());
+        update_skip_taskbar_atom(&mut atoms, skip, hidden);
+        connection
+            .change_property32(PropMode::REPLACE, window, state, AtomEnum::ATOM, &atoms)
+            .map_err(|_| ())?
+            .check()
+            .map_err(|_| ())?;
+        return connection.flush().map_err(|_| ());
+    }
     // EWMH: action 1 adds the property, 0 removes it; source 1 is an app.
     let event = ClientMessageEvent::new(32, window, state, [u32::from(hidden), skip, 0, 1, 0]);
     connection
@@ -1220,6 +1265,14 @@ fn set_taskbar_visibility(frame: &eframe::Frame, hidden: bool) -> Result<(), ()>
         .check()
         .map_err(|_| ())?;
     connection.flush().map_err(|_| ())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn update_skip_taskbar_atom(atoms: &mut Vec<u32>, skip: u32, hidden: bool) {
+    atoms.retain(|atom| *atom != skip);
+    if hidden {
+        atoms.push(skip);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1484,6 +1537,56 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_x11_hint_preserves_other_window_states() {
+        let mut atoms = vec![1, 2, 3];
+        update_skip_taskbar_atom(&mut atoms, 2, true);
+        assert_eq!(atoms, [1, 3, 2]);
+        update_skip_taskbar_atom(&mut atoms, 2, true);
+        assert_eq!(atoms, [1, 3, 2]);
+        update_skip_taskbar_atom(&mut atoms, 2, false);
+        assert_eq!(atoms, [1, 3]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn minimize_and_remap_invalidate_taskbar_hint() {
+        let directory = unique_test_directory("taskbar-remap");
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            directory.join(CONFIG_FILE),
+            FakeReceiverProcess::default(),
+        );
+        let context = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .minimized = Some(true);
+        app.taskbar_hidden = Some(true);
+        let _ = context.run(input.clone(), |ctx| {
+            app.hide_minimized_to_tray(ctx, true, true)
+        });
+        assert!(app.hidden_to_tray);
+        assert_eq!(app.taskbar_hidden, None);
+        let _ = context.run(input.clone(), |ctx| {
+            app.handle_tray_action(ctx, tray::Action::Settings);
+            // Simulate setting an initial property before the restored map.
+            app.taskbar_hidden = Some(true);
+            app.hide_minimized_to_tray(ctx, true, true);
+        });
+        assert_eq!(app.taskbar_hidden, Some(true));
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .minimized = Some(false);
+        let _ = context.run(input, |ctx| app.hide_minimized_to_tray(ctx, true, true));
+        assert_eq!(app.taskbar_hidden, None);
+        assert!(!app.hidden_to_tray);
+    }
 
     #[test]
     fn hide_taskbar_preference_is_opt_in_and_round_trips() {
@@ -2130,7 +2233,7 @@ mod tests {
             restoring_from_tray: false,
             #[cfg(unix)]
             notifications: notification::NotificationBridge::default(),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", test))]
             taskbar_hidden: None,
         };
         app.settings.bind = "127.0.0.1:4343".to_owned();
