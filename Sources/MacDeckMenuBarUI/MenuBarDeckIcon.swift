@@ -7,14 +7,12 @@ public enum MenuBarDeckIcon {
 
     public static func image(
         for status: MenuBarStatus,
-        connectingPhase: Int = 0,
-        isDark: Bool = false
+        connectingPhase: Int = 0
     ) -> NSImage {
         let size = NSSize(width: 20, height: 20)
         let image = NSImage(size: size, flipped: false) { _ in
-            let foreground: NSColor = status == .remote && !isDark ? .black : .white
-            foreground.setStroke()
-            foreground.setFill()
+            NSColor.white.setStroke()
+            NSColor.white.setFill()
 
             // Coordinates reproduce the 18 × 18 SVGs, inset by one point.
             let center = NSPoint(x: 7.7, y: 10)
@@ -55,14 +53,23 @@ public enum MenuBarDeckIcon {
                         )).fill()
                     }
                 }
-            } else {
-                NSColor(calibratedRed: 26 / 255, green: 159 / 255, blue: 1, alpha: 1).setFill()
-                circle.fill()
             }
             return true
         }
-        image.isTemplate = status != .remote
+        image.isTemplate = true
         image.accessibilityDescription = "Steam Deck keyboard input, \(statusDescription(status))"
+        return image
+    }
+
+    /// A separate, non-template layer preserves the blue accent while macOS
+    /// tints the surrounding logo for the actual menu bar appearance.
+    public static func remoteAccent() -> NSImage {
+        let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { _ in
+            NSColor(calibratedRed: 26 / 255, green: 159 / 255, blue: 1, alpha: 1).setFill()
+            NSBezierPath(ovalIn: NSRect(x: 4.5, y: 6.8, width: 6.4, height: 6.4)).fill()
+            return true
+        }
+        image.isTemplate = false
         return image
     }
 

@@ -258,7 +258,7 @@ final class SettingsWindowControllerTests: XCTestCase {
         ]
         for (status, description) in expectedDescriptions {
             let image = MenuBarDeckIcon.image(for: status)
-            XCTAssertEqual(image.isTemplate, status != .remote)
+            XCTAssertTrue(image.isTemplate)
             XCTAssertEqual(image.accessibilityDescription, description)
             XCTAssertEqual(image.size.width, 20)
             XCTAssertEqual(image.size.height, 20)
@@ -274,11 +274,8 @@ final class SettingsWindowControllerTests: XCTestCase {
             MenuBarDeckIcon.image(for: .remote).tiffRepresentation,
             "REMOTE must render a visibly captured keyboard state."
         )
-        XCTAssertNotEqual(
-            MenuBarDeckIcon.image(for: .remote, isDark: false).tiffRepresentation,
-            MenuBarDeckIcon.image(for: .remote, isDark: true).tiffRepresentation,
-            "The filled logo must contrast against both menu bar appearances."
-        )
+        XCTAssertFalse(MenuBarDeckIcon.remoteAccent().isTemplate)
+        XCTAssertEqual(MenuBarDeckIcon.remoteAccent().size, NSSize(width: 20, height: 20))
         XCTAssertEqual(MenuBarDeckIcon.connectingFrameCount, 4)
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 0).tiffRepresentation,

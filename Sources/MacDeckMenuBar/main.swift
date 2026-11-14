@@ -6,7 +6,6 @@ import SwiftUI
 @main
 struct MacDeckMenuBarApp: App {
     @StateObject private var model = MenuBarModel()
-    @Environment(\.colorScheme) private var colorScheme
 
     init() {
         let showInDock = DockVisibilityPreference.load()
@@ -24,12 +23,20 @@ struct MacDeckMenuBarApp: App {
         MenuBarExtra {
             MenuContentView(model: model)
         } label: {
-            Image(nsImage: MenuBarDeckIcon.image(
-                for: model.status.presentationStatus,
-                connectingPhase: model.connectionAnimationPhase,
-                isDark: colorScheme == .dark
-            ))
-                .accessibilityLabel(model.status.title)
+            ZStack {
+                Image(nsImage: MenuBarDeckIcon.image(
+                    for: model.status.presentationStatus,
+                    connectingPhase: model.connectionAnimationPhase
+                ))
+                .renderingMode(.template)
+                if model.status.presentationStatus == .remote {
+                    Image(nsImage: MenuBarDeckIcon.remoteAccent())
+                        .renderingMode(.original)
+                        .accessibilityHidden(true)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(model.status.title)
         }
     }
 }
