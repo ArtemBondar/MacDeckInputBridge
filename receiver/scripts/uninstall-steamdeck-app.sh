@@ -23,6 +23,7 @@ rm -f "$applications_root/mac-deck-input-bridge.desktop"
 rm -f "$icons_root/mac-deck-input-bridge.png"
 rm -f "$fallback_icons_root/mac-deck-input-bridge.svg"
 rm -f "$fallback_icons_root/mac-deck-input-bridge-tray-symbolic.svg"
+rm -f "$fallback_icons_root/mac-deck-input-bridge-tray-active-symbolic.svg"
 rm -f "$pixmaps_root/mac-deck-input-bridge.png"
 rm -f "$pixmaps_root/mac-deck-input-bridge.svg"
 
