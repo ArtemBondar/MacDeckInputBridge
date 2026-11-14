@@ -23,12 +23,20 @@ struct MacDeckMenuBarApp: App {
         MenuBarExtra {
             MenuContentView(model: model)
         } label: {
-            Image(nsImage: MenuBarDeckIcon.image(
-                for: model.status.presentationStatus,
-                connectingPhase: model.connectionAnimationPhase
-            ))
+            ZStack {
+                Image(nsImage: MenuBarDeckIcon.image(
+                    for: model.status.presentationStatus,
+                    connectingPhase: model.connectionAnimationPhase
+                ))
                 .renderingMode(.template)
-                .accessibilityLabel(model.status.title)
+                if model.status.presentationStatus == .remote {
+                    Image(nsImage: MenuBarDeckIcon.remoteAccent())
+                        .renderingMode(.original)
+                        .accessibilityHidden(true)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(model.status.title)
         }
     }
 }
