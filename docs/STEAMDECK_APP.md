@@ -41,7 +41,9 @@ If the `uinput` group already exists, skip only the `groupadd` command.
 In Desktop Mode, the MacDeck system-tray icon provides quick access to the
 window, settings, Mac input toggle and clipboard send action. Closing the
 window keeps MacDeck running in the tray; choose **Quit MacDeck** in its tray
-menu to stop it. If the tray is unavailable, closing the window quits normally.
+menu to stop it. The desktop window uses XWayland when available so the tray
+can hide and restore it. If XWayland or the tray is unavailable, closing the
+window quits normally.
 The tray shows whether Mac input is enabled, not whether a Mac is connected.
 
 1. In MacDeck, open **Settings**.
