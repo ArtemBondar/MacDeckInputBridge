@@ -38,6 +38,12 @@ If the `uinput` group already exists, skip only the `groupadd` command.
 
 ## Use
 
+In Desktop Mode, the MacDeck system-tray icon provides quick access to the
+window, settings, Mac input toggle and clipboard send action. Closing the
+window keeps MacDeck running in the tray; choose **Quit MacDeck** in its tray
+menu to stop it. If the tray is unavailable, closing the window quits normally.
+The tray shows whether Mac input is enabled, not whether a Mac is connected.
+
 1. In MacDeck, open **Settings**.
 2. Generate or copy the pairing secret and note the shown Steam Deck IP address.
 3. Enter that IP address and secret in the Mac menu bar app's Settings.

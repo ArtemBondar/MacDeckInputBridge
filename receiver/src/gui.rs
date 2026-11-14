@@ -17,12 +17,19 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(unix)]
+mod tray;
+
 const APP_NAME: &str = "MacDeck";
 const APP_ID: &str = "mac-deck-input-bridge";
 const CONFIG_DIRECTORY: &str = "mac-deck-input-bridge";
 const CONFIG_FILE: &str = "receiver.toml";
 const GAMING_MODE_PREFERRED_SIZE: [f32; 2] = [960.0, 720.0];
 const MINIMUM_WINDOW_SIZE: [f32; 2] = [480.0, 360.0];
+// A hidden idle window must eventually recover if the tray service exits
+// without a watcher-offline callback. Visible or active windows already repaint.
+#[cfg(unix)]
+const HIDDEN_TRAY_HEALTH_CHECK: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ReceiverSettings {
@@ -113,6 +120,7 @@ fn clipboard_diagnostic(line: &str) -> Option<&str> {
 struct ReceiverProcess {
     child: Option<Child>,
     diagnostics: Option<Receiver<String>>,
+    context: Option<egui::Context>,
 }
 
 trait ReceiverSupervisor {
@@ -158,10 +166,14 @@ impl ReceiverSupervisor for ReceiverProcess {
             .map_err(|error| format!("Could not start receiver: {error}"))?;
         let (sender, receiver) = mpsc::channel();
         if let Some(stderr) = child.stderr.take() {
+            let context = self.context.clone();
             thread::spawn(move || {
                 for line in io::BufReader::new(stderr).lines().map_while(Result::ok) {
                     if let Some(message) = clipboard_diagnostic(&line) {
                         let _ = sender.send(message.to_owned());
+                        if let Some(context) = &context {
+                            context.request_repaint();
+                        }
                     }
                 }
             });
@@ -245,6 +257,12 @@ struct ReceiverApp<P = ReceiverProcess> {
     status: Option<String>,
     gamepad: Option<GamepadNavigation>,
     gamepad_start_attempted: bool,
+    #[cfg(unix)]
+    tray: Option<tray::TrayBridge>,
+    #[cfg(unix)]
+    quitting: bool,
+    #[cfg(unix)]
+    hidden_to_tray: bool,
 }
 
 /// Reads the Steam Deck controls directly from Linux evdev. Steam does
@@ -492,7 +510,7 @@ fn next_focus_target(
 }
 
 impl ReceiverApp<ReceiverProcess> {
-    fn new() -> Self {
+    fn new(context: &egui::Context) -> Self {
         let settings_path = settings_path();
         let (settings, status) = load_settings_or_default(&settings_path);
         Self {
@@ -501,17 +519,55 @@ impl ReceiverApp<ReceiverProcess> {
             process: ReceiverProcess {
                 child: None,
                 diagnostics: None,
+                context: Some(context.clone()),
             },
             selected_tab: Tab::Control,
             ip_addresses: local_ipv4_addresses(),
             status,
             gamepad: None,
             gamepad_start_attempted: false,
+            #[cfg(unix)]
+            tray: (cfg!(target_os = "linux") && !controller_navigation_enabled())
+                .then(|| tray::TrayBridge::start(context.clone())),
+            #[cfg(unix)]
+            quitting: false,
+            #[cfg(unix)]
+            hidden_to_tray: false,
         }
     }
 }
 
 impl<P: ReceiverSupervisor> ReceiverApp<P> {
+    #[cfg(unix)]
+    fn handle_tray_action(&mut self, context: &egui::Context, action: tray::Action) {
+        match action {
+            tray::Action::Show | tray::Action::Settings => {
+                self.hidden_to_tray = false;
+                self.selected_tab = if action == tray::Action::Settings {
+                    Tab::Settings
+                } else {
+                    Tab::Control
+                };
+                context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                context.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            tray::Action::Toggle => self.toggle_receiver(),
+            tray::Action::SendClipboard => self.send_clipboard_from_ui(),
+            tray::Action::Quit => {
+                self.quitting = true;
+                context.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            tray::Action::Offline => {
+                self.hidden_to_tray = false;
+                self.status = Some(
+                    "System tray unavailable. Use the MacDeck window to control input.".into(),
+                );
+                context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            }
+            tray::Action::Online => {}
+        }
+    }
+
     #[cfg(test)]
     fn with_process(settings: ReceiverSettings, settings_path: PathBuf, process: P) -> Self {
         Self {
@@ -523,6 +579,12 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             status: None,
             gamepad: None,
             gamepad_start_attempted: true,
+            #[cfg(unix)]
+            tray: None,
+            #[cfg(unix)]
+            quitting: false,
+            #[cfg(unix)]
+            hidden_to_tray: false,
         }
     }
 
@@ -564,6 +626,17 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
 
     fn copied_secret_status(&mut self) {
         self.status = Some("Pairing secret copied to the clipboard.".to_owned());
+    }
+
+    fn send_clipboard_from_ui(&mut self) {
+        self.status = Some(if !self.settings.sync_clipboard_to_mac {
+            "Enable Deck-to-Mac clipboard sharing in Settings first.".to_owned()
+        } else {
+            match self.process.send_clipboard() {
+                Ok(()) => "Sending clipboard to Mac…".to_owned(),
+                Err(error) => error,
+            }
+        });
     }
 
     fn regenerate_pairing_secret_from_ui(&mut self) {
@@ -624,14 +697,7 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
                 ui.add_sized([260.0, 48.0], egui::Button::new("Send Deck clipboard now"));
             track_focus(focus_widgets, FocusTarget::SendClipboardToMac, &response);
             if response.clicked() {
-                self.status = Some(if !self.settings.sync_clipboard_to_mac {
-                    "Enable Deck-to-Mac clipboard sharing in Settings first.".to_owned()
-                } else {
-                    match self.process.send_clipboard() {
-                        Ok(()) => "Sending clipboard to Mac…".to_owned(),
-                        Err(error) => error,
-                    }
-                });
+                self.send_clipboard_from_ui();
             }
             ui.add_space(20.0);
             ui.separator();
@@ -858,6 +924,31 @@ fn inject_gamepad_key_presses(context: &egui::Context, keys: impl IntoIterator<I
 
 impl eframe::App for ReceiverApp<ReceiverProcess> {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(unix)]
+        {
+            let actions = self
+                .tray
+                .as_mut()
+                .map_or_else(Vec::new, tray::TrayBridge::poll);
+            for action in actions {
+                self.handle_tray_action(context, action);
+            }
+            let running = self.process.is_running();
+            if let Some(tray) = &mut self.tray {
+                tray.update(running, self.settings.sync_clipboard_to_mac);
+                if context.input(|input| input.viewport().close_requested())
+                    && tray.available()
+                    && !self.quitting
+                {
+                    context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    context.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    self.hidden_to_tray = true;
+                }
+            }
+            if self.hidden_to_tray {
+                context.request_repaint_after(HIDDEN_TRAY_HEALTH_CHECK);
+            }
+        }
         if let Some(message) = self
             .process
             .diagnostics
@@ -866,7 +957,6 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
         {
             self.status = Some(message);
         }
-        context.request_repaint_after(Duration::from_secs(1));
         if !self.gamepad_start_attempted {
             self.gamepad_start_attempted = true;
             self.gamepad = GamepadNavigation::start(context.clone());
@@ -940,7 +1030,7 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
         // input event arrives. Poll a running child only once per second so a
         // crash is eventually reflected in Control without waking the Deck at
         // a display-frame rate.
-        if self.selected_tab == Tab::Control && self.process.is_running() {
+        if self.process.is_running() {
             context.request_repaint_after(Duration::from_secs(1));
         }
     }
@@ -1167,7 +1257,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         APP_NAME,
         options,
-        Box::new(|_context| Ok(Box::new(ReceiverApp::new()))),
+        Box::new(|context| Ok(Box::new(ReceiverApp::new(&context.egui_ctx)))),
     )
 }
 
@@ -1206,6 +1296,40 @@ mod tests {
             self.running = false;
             Ok(())
         }
+
+        fn send_clipboard(&mut self) -> Result<(), String> {
+            self.calls.push("send_clipboard");
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tray_actions_use_receiver_controls_and_preserve_clipboard_opt_in() {
+        let directory = unique_test_directory("tray-actions");
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            directory.join(CONFIG_FILE),
+            FakeReceiverProcess::default(),
+        );
+        let context = egui::Context::default();
+        app.handle_tray_action(&context, tray::Action::SendClipboard);
+        assert!(app.process.calls.is_empty());
+        assert!(app.status.as_ref().unwrap().contains("Settings"));
+        app.handle_tray_action(&context, tray::Action::Toggle);
+        assert!(app.process.running);
+        app.settings.sync_clipboard_to_mac = true;
+        app.handle_tray_action(&context, tray::Action::SendClipboard);
+        assert_eq!(app.process.calls, ["start", "send_clipboard"]);
+        app.handle_tray_action(&context, tray::Action::Toggle);
+        assert!(!app.process.running);
+        app.handle_tray_action(&context, tray::Action::Settings);
+        assert_eq!(app.selected_tab, Tab::Settings);
+        app.handle_tray_action(&context, tray::Action::Offline);
+        assert!(app.status.as_ref().unwrap().contains("unavailable"));
+        app.handle_tray_action(&context, tray::Action::Quit);
+        assert!(app.quitting);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -1550,12 +1674,19 @@ mod tests {
             process: ReceiverProcess {
                 child: None,
                 diagnostics: None,
+                context: None,
             },
             selected_tab: Tab::Settings,
             ip_addresses: Vec::new(),
             status: None,
             gamepad: None,
             gamepad_start_attempted: true,
+            #[cfg(unix)]
+            tray: None,
+            #[cfg(unix)]
+            quitting: false,
+            #[cfg(unix)]
+            hidden_to_tray: false,
         };
         app.settings.bind = "127.0.0.1:4343".to_owned();
         app.apply_settings().unwrap();
