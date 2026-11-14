@@ -57,9 +57,13 @@ input, or UI.
    closed to normal keyboard/mouse operation, never require the app to run as
    root, never log typed text or secrets, and must provide an actionable
    non-secret diagnostic when a required capability is unavailable.
-7. **Release only reviewable evidence.** Use a feature branch and PR; run the
-   full locked Swift/Rust/test-installer suite. Record what CI proves and what
-   still requires physical verification in the PR and release notes.
+7. **Match local checks to the change.** For Deck-only changes, run the locked
+   Rust formatting, lint and test suite; run the Deck installer regression test
+   when packaging or installation is affected. For Mac-only changes, run Swift
+   tests and the applicable macOS installer checks. Run both suites for shared
+   protocol, cross-device behavior, or changes whose impact is uncertain. Run
+   the full Swift/Rust/installer suite before a release. Use a feature branch
+   and PR, and record what CI proves and what still needs physical verification.
 8. **Name branches by change type.** Use `feature/<issue>-<short-name>` for
    new user-facing capability, `bugfix/<issue>-<short-name>` for a correction,
    and `chore/<issue>-<short-name>` for tooling, documentation, or refactoring.

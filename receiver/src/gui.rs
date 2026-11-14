@@ -619,7 +619,9 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             }
             ui.add_space(12.0);
             ui.label("When disabled, the receiver stops and releases all injected keys.");
-            let response = ui.button("Send Deck clipboard now");
+            ui.add_space(16.0);
+            let response =
+                ui.add_sized([260.0, 48.0], egui::Button::new("Send Deck clipboard now"));
             track_focus(focus_widgets, FocusTarget::SendClipboardToMac, &response);
             if response.clicked() {
                 self.status = Some(if !self.settings.sync_clipboard_to_mac {
