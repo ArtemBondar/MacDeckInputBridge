@@ -2,6 +2,15 @@
 
 Perform this checklist on a MacBook and Steam Deck OLED in Desktop Mode before everyday use.
 
+## Desktop Mode system tray
+
+- Launch the installed MacDeck app and confirm its icon appears in Plasma's system tray (including the hidden-items area). Check the tooltip and menu say whether Mac input is enabled; this state does not assert a Mac is connected.
+- Use the tray menu to enable and disable input, send clipboard text, open Settings, and reopen the Control window. Verify errors are visible and no action exposes clipboard contents or the pairing secret.
+- Close the window and confirm MacDeck remains available in the tray and an enabled receiver remains active. Quit from the tray and confirm the receiver exits and held keys are released.
+- While the window is hidden, restart or disable Plasma's system tray. Confirm MacDeck restores its window, remains controllable, and does not leave input stuck. Repeat with no tray available at startup: closing the window must quit normally.
+- While hidden, trigger a tray input error and an asynchronous clipboard error. Confirm Plasma shows a notification with actionable text and no clipboard contents or secret, without opening the window. Repeat with desktop notifications unavailable and verify the window becomes visible with the error instead.
+- Verify Gaming Mode separately: no tray is expected, and the app's normal focus and close behavior must continue working.
+
 1. Build both components from the same revision and run `swift test` plus `cargo test --locked --features desktop-ui`. The hardened sender and receiver must be updated together.
 2. Generate a fresh receiver pairing secret; start the receiver as a non-root user with `/dev/uinput` access; start the sender with the Deck's Wi-Fi address.
 3. Confirm ordinary local typing remains local before invoking the hotkey and while the sender is CONNECTING (including with the receiver stopped).
