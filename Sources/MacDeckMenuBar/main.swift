@@ -23,7 +23,7 @@ struct MacDeckMenuBarApp: App {
         MenuBarExtra {
             MenuContentView(model: model)
         } label: {
-            MenuBarIconLabel(status: model.status, phase: model.connectionAnimationPhase)
+            MenuBarIconLabel(status: model.status, phase: model.connectionAnimationPhase, style: model.iconStyle)
         }
     }
 }
@@ -31,15 +31,17 @@ struct MacDeckMenuBarApp: App {
 private struct MenuBarIconLabel: View {
     let status: SenderStatus
     let phase: Int
+    let style: MenuBarIconStyle
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Image(nsImage: MenuBarDeckIcon.image(
             for: status.presentationStatus,
             connectingPhase: phase,
-            isDark: colorScheme == .dark
+            isDark: colorScheme == .dark,
+            style: style
         ))
-        .renderingMode(status.presentationStatus == .remote ? .original : .template)
+        .renderingMode(style == .logo && status.presentationStatus == .remote ? .original : .template)
         .accessibilityLabel(status.title)
     }
 }
@@ -49,6 +51,7 @@ private final class MenuBarModel: ObservableObject {
     @Published var host: String
     @Published var port: String
     @Published var pairingSecret: String
+    @Published var iconStyle: MenuBarIconStyle
     @Published var showInDock: Bool
     @Published var allowLocalSecretFallback: Bool
     @Published var syncClipboardFromMac: Bool
@@ -68,6 +71,7 @@ private final class MenuBarModel: ObservableObject {
         let settings = store.loadSettings()
         host = settings.host
         port = String(settings.port)
+        iconStyle = MenuBarIconStyle.load()
         showInDock = DockVisibilityPreference.load()
         allowLocalSecretFallback = store.allowsLocalSecretFallback
         syncClipboardFromMac = settings.syncClipboardFromMac
@@ -174,6 +178,7 @@ private final class MenuBarModel: ObservableObject {
                 port: port,
                 pairingSecret: pairingSecret,
                 showInDock: showInDock,
+                iconStyle: iconStyle,
                 allowLocalSecretFallback: allowLocalSecretFallback,
                 syncClipboardFromMac: syncClipboardFromMac,
                 syncClipboardFromDeck: syncClipboardFromDeck,
@@ -199,6 +204,8 @@ private final class MenuBarModel: ObservableObject {
             try store.setAllowsLocalSecretFallback(allowLocalSecretFallback)
             let persistence = try store.savePairingSecret(pairingSecret)
             DockVisibilityPreference.save(showInDock: showInDock)
+            iconStyle = draft.iconStyle
+            iconStyle.save()
             message = switch persistence {
             case .keychain:
                 "Saved. The next toggle will use these settings."

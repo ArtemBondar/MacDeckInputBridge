@@ -5,6 +5,7 @@ public struct SettingsDraft: Equatable {
     public var port: String
     public var pairingSecret: String
     public var showInDock: Bool
+    public var iconStyle: MenuBarIconStyle
     public var allowLocalSecretFallback: Bool
     public var syncClipboardFromMac: Bool
     public var syncClipboardFromDeck: Bool
@@ -15,6 +16,7 @@ public struct SettingsDraft: Equatable {
         port: String,
         pairingSecret: String,
         showInDock: Bool = true,
+        iconStyle: MenuBarIconStyle = .logo,
         allowLocalSecretFallback: Bool = false,
         syncClipboardFromMac: Bool = false,
         syncClipboardFromDeck: Bool = false,
@@ -24,6 +26,7 @@ public struct SettingsDraft: Equatable {
         self.port = port
         self.pairingSecret = pairingSecret
         self.showInDock = showInDock
+        self.iconStyle = iconStyle
         self.allowLocalSecretFallback = allowLocalSecretFallback
         self.syncClipboardFromMac = syncClipboardFromMac
         self.syncClipboardFromDeck = syncClipboardFromDeck
@@ -41,6 +44,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     public let portField = NSTextField(string: "")
     public let pairingSecretField = NSSecureTextField(string: "")
     public let showInDockCheckbox = NSButton(checkboxWithTitle: "Show MacDeckInputBridge in Dock", target: nil, action: nil)
+    public let iconStylePopup = NSPopUpButton()
+    public let iconPreviews = [NSImageView(), NSImageView(), NSImageView()]
     public let allowLocalSecretFallbackCheckbox = NSButton(
         checkboxWithTitle: "If Keychain is unavailable, store the secret in a private local file",
         target: nil,
@@ -64,7 +69,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     public init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 660),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -89,6 +94,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         portField.stringValue = draft.port
         pairingSecretField.stringValue = draft.pairingSecret
         showInDockCheckbox.state = draft.showInDock ? .on : .off
+        iconStylePopup.selectItem(at: MenuBarIconStyle.allCases.firstIndex(of: draft.iconStyle) ?? 0)
+        updateIconPreviews(nil)
         allowLocalSecretFallbackCheckbox.state = draft.allowLocalSecretFallback ? .on : .off
         syncClipboardCheckbox.state = draft.syncClipboardFromMac ? .on : .off
         syncClipboardFromDeckCheckbox.state = draft.syncClipboardFromDeck ? .on : .off
@@ -133,6 +140,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             port: portField.stringValue,
             pairingSecret: pairingSecretField.stringValue,
             showInDock: showInDockCheckbox.state == .on,
+            iconStyle: selectedIconStyle,
             allowLocalSecretFallback: allowLocalSecretFallbackCheckbox.state == .on,
             syncClipboardFromMac: syncClipboardCheckbox.state == .on,
             syncClipboardFromDeck: syncClipboardFromDeckCheckbox.state == .on
@@ -150,6 +158,18 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
               isKeychainRelatedNotice(messageLabel.stringValue) else { return }
         messageLabel.stringValue = "After you click Save, the pairing secret will be stored in this Mac’s private local file."
         messageLabel.textColor = .secondaryLabelColor
+    }
+
+    private var selectedIconStyle: MenuBarIconStyle {
+        let index = iconStylePopup.indexOfSelectedItem
+        return MenuBarIconStyle.allCases.indices.contains(index) ? MenuBarIconStyle.allCases[index] : .logo
+    }
+
+    @objc private func updateIconPreviews(_ sender: Any?) {
+        let isDark = window?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        for (index, status) in [MenuBarStatus.local, .connecting, .remote].enumerated() {
+            iconPreviews[index].image = MenuBarDeckIcon.image(for: status, connectingPhase: 21, isDark: isDark, style: selectedIconStyle)
+        }
     }
 
     private func isKeychainRelatedNotice(_ notice: String) -> Bool {
@@ -203,6 +223,20 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         saveButton.keyEquivalent = "\r"
         allowLocalSecretFallbackCheckbox.target = self
         allowLocalSecretFallbackCheckbox.action = #selector(localSecretFallbackSelectionChanged(_:))
+        iconStylePopup.addItems(withTitles: MenuBarIconStyle.allCases.map(\.title))
+        iconStylePopup.target = self
+        iconStylePopup.action = #selector(updateIconPreviews(_:))
+        let previewRow = NSStackView()
+        previewRow.orientation = .horizontal
+        previewRow.alignment = .centerY
+        previewRow.spacing = 14
+        for (name, image) in zip(["Mac", "Connecting", "Steam Deck"], iconPreviews) {
+            image.imageScaling = .scaleProportionallyUpOrDown
+            image.widthAnchor.constraint(equalToConstant: 32).isActive = true
+            image.heightAnchor.constraint(equalToConstant: 24).isActive = true
+            previewRow.addArrangedSubview(image)
+            previewRow.addArrangedSubview(label(name, font: .systemFont(ofSize: 12)))
+        }
 
         let stack = NSStackView(views: [
             deckTitle,
@@ -219,6 +253,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             inputSourceTitle,
             currentInputSourceLabel,
             showInDockCheckbox,
+            fieldRow("Menu bar icon", iconStylePopup),
+            previewRow,
             messageLabel,
             buttonRow(saveButton)
         ])
@@ -237,7 +273,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         ])
     }
 
-    private func fieldRow(_ title: String, _ field: NSTextField) -> NSStackView {
+    private func fieldRow(_ title: String, _ field: NSView) -> NSStackView {
         let titleLabel = label(title, font: .systemFont(ofSize: 13, weight: .medium))
         let row = NSStackView(views: [titleLabel, field])
         row.orientation = .horizontal
