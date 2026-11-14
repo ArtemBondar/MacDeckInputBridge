@@ -14,3 +14,13 @@ body{font-family:system-ui,-apple-system,sans-serif}.header{border-bottom:2px so
 :root[data-theme="dark"]{--paper:#18221e;--ink:#edf3e9;--muted:#adbdaf;--line:#a7b9aa;--green:#a9cdb5;--wash:#33483b}
 
 .hero-logo{position:absolute;right:28px;top:55px;width:64px;height:64px;border-radius:14px}
+
+/* A small illustrated shortcut, using the same mark as the menu-bar app. */
+.hero-art{min-height:370px;padding:30px;display:flex;flex-direction:column;justify-content:space-between;background:#e5eee4;color:#26332e}
+.art-top,.art-bottom,.shortcut-label{font-family:ui-monospace,SFMono-Regular,monospace;font-size:10px;letter-spacing:.1em;font-weight:700}
+.art-top,.art-bottom{display:flex;justify-content:space-between;align-items:center;color:#587366}
+.art-bottom span{font-size:20px;line-height:1;color:#1a9fff}
+.switch-scene{padding:26px 0;text-align:center}.switch-line{display:flex;align-items:center;justify-content:center;gap:clamp(12px,2vw,24px);flex-wrap:wrap}.device-name{font-size:clamp(22px,2.2vw,30px);font-weight:750;letter-spacing:-.055em}.destination{display:flex;align-items:center;gap:10px}.deck-mark{width:42px;height:42px;flex:none}.switch-arrow{font-size:29px;color:#779b88}.shortcut-label{margin:30px 0 12px;color:#587366}.keys{display:flex;justify-content:center;gap:7px}.keys span{min-width:52px;padding:7px 10px;border:1.5px solid #557467;border-bottom-width:3px;border-radius:7px;background:#f9f6ec;color:#344f45;font:600 12px ui-monospace,SFMono-Regular,monospace}
+@media(prefers-color-scheme:dark){:root:not([data-theme]) .hero-art{background:#263d35;color:#edf3e9}:root:not([data-theme]) .art-top,:root:not([data-theme]) .art-bottom,:root:not([data-theme]) .shortcut-label{color:#b0c8b6}:root:not([data-theme]) .keys span{background:#1c3029;color:#edf3e9;border-color:#83a894}}
+:root[data-theme="dark"] .hero-art{background:#263d35;color:#edf3e9}:root[data-theme="dark"] .art-top,:root[data-theme="dark"] .art-bottom,:root[data-theme="dark"] .shortcut-label{color:#b0c8b6}:root[data-theme="dark"] .keys span{background:#1c3029;color:#edf3e9;border-color:#83a894}
+@media(max-width:380px){.hero-art{padding:22px}.device-name{font-size:21px}.deck-mark{width:34px;height:34px}}
