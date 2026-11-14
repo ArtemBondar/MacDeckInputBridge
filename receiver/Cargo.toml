@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = []
-desktop-ui = ["dep:eframe", "dep:evdev", "dep:get_if_addrs", "dep:image", "dep:serde", "dep:toml", "dep:ksni"]
+desktop-ui = ["dep:eframe", "dep:evdev", "dep:get_if_addrs", "dep:image", "dep:serde", "dep:toml", "dep:ksni", "dep:zbus"]
 
 [dependencies]
 base64 = "0.22"
@@ -26,6 +26,7 @@ thiserror = "1.0"
 toml = { version = "0.8", optional = true }
 wl-clipboard-rs = "0.9.4"
 ksni = { version = "0.3.7", features = ["blocking"], optional = true }
+zbus = { version = "5.19", default-features = false, features = ["blocking-api", "tokio"], optional = true }
 
 [[bin]]
 name = "mac-deck-receiver-ui"

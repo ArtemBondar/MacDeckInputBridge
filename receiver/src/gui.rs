@@ -18,6 +18,8 @@ use std::{
 };
 
 #[cfg(unix)]
+mod notification;
+#[cfg(unix)]
 mod tray;
 
 const APP_NAME: &str = "MacDeck";
@@ -79,7 +81,7 @@ impl ReceiverSettings {
     }
 }
 
-fn clipboard_diagnostic(line: &str) -> Option<&str> {
+fn clipboard_diagnostic(line: &str) -> Option<&'static str> {
     if line == "Steam Deck clipboard updated from Mac." {
         return Some("Clipboard received from Mac.");
     }
@@ -108,10 +110,14 @@ fn clipboard_diagnostic(line: &str) -> Option<&str> {
     }
     let message = line.strip_prefix("Could not update the Steam Deck clipboard: ")?;
     match message {
-        "Cannot connect to Wayland; open MacDeck in Desktop Mode"
-        | "The Wayland compositor lacks a required clipboard protocol"
-        | "Could not write to the Wayland clipboard; check the Desktop Mode session" => {
-            Some(message)
+        "Cannot connect to Wayland; open MacDeck in Desktop Mode" => {
+            Some("Cannot connect to Wayland; open MacDeck in Desktop Mode")
+        }
+        "The Wayland compositor lacks a required clipboard protocol" => {
+            Some("The Wayland compositor lacks a required clipboard protocol")
+        }
+        "Could not write to the Wayland clipboard; check the Desktop Mode session" => {
+            Some("Could not write to the Wayland clipboard; check the Desktop Mode session")
         }
         _ => None,
     }
@@ -119,7 +125,7 @@ fn clipboard_diagnostic(line: &str) -> Option<&str> {
 
 struct ReceiverProcess {
     child: Option<Child>,
-    diagnostics: Option<Receiver<String>>,
+    diagnostics: Option<Receiver<&'static str>>,
     context: Option<egui::Context>,
 }
 
@@ -170,7 +176,7 @@ impl ReceiverSupervisor for ReceiverProcess {
             thread::spawn(move || {
                 for line in io::BufReader::new(stderr).lines().map_while(Result::ok) {
                     if let Some(message) = clipboard_diagnostic(&line) {
-                        let _ = sender.send(message.to_owned());
+                        let _ = sender.send(message);
                         if let Some(context) = &context {
                             context.request_repaint();
                         }
@@ -263,6 +269,8 @@ struct ReceiverApp<P = ReceiverProcess> {
     quitting: bool,
     #[cfg(unix)]
     hidden_to_tray: bool,
+    #[cfg(unix)]
+    notifications: notification::NotificationBridge,
 }
 
 /// Reads the Steam Deck controls directly from Linux evdev. Steam does
@@ -533,6 +541,8 @@ impl ReceiverApp<ReceiverProcess> {
             quitting: false,
             #[cfg(unix)]
             hidden_to_tray: false,
+            #[cfg(unix)]
+            notifications: notification::NotificationBridge::default(),
         }
     }
 }
@@ -551,8 +561,17 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
                 context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 context.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
-            tray::Action::Toggle => self.toggle_receiver(),
-            tray::Action::SendClipboard => self.send_clipboard_from_ui(),
+            tray::Action::Toggle => {
+                self.toggle_receiver();
+                if self.status.is_some() {
+                    self.notify_tray_error(context, "Could not change Mac input. Open MacDeck to check its settings and permissions.");
+                }
+            }
+            tray::Action::SendClipboard => {
+                if !self.send_clipboard_from_ui() {
+                    self.notify_tray_error(context, "Could not send the clipboard. Open MacDeck and check the connection and settings.");
+                }
+            }
             tray::Action::Quit => {
                 self.quitting = true;
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -566,6 +585,43 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             }
             tray::Action::Online => {}
         }
+    }
+
+    #[cfg(unix)]
+    fn notify_tray_error(&mut self, context: &egui::Context, message: &'static str) {
+        if self.hidden_to_tray && !self.notifications.send(context, message) {
+            self.show_notification_fallback(context, message);
+        }
+    }
+
+    #[cfg(unix)]
+    fn show_notification_fallback(&mut self, context: &egui::Context, message: &'static str) {
+        if self.hidden_to_tray {
+            self.hidden_to_tray = false;
+            self.status = Some(message.to_owned());
+            context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
+    }
+
+    #[cfg(unix)]
+    fn poll_notifications(&mut self, context: &egui::Context, now: Instant) {
+        if let Some(message) = self.notifications.poll(now) {
+            self.show_notification_fallback(context, message);
+        }
+        self.notifications.request_deadline_repaint(context, now);
+    }
+
+    fn handle_clipboard_diagnostic(&mut self, context: &egui::Context, message: &'static str) {
+        self.status = Some(message.to_owned());
+        #[cfg(unix)]
+        if !matches!(
+            message,
+            "Clipboard received from Mac." | "Clipboard received by Mac."
+        ) {
+            self.notify_tray_error(context, message);
+        }
+        #[cfg(not(unix))]
+        let _ = context;
     }
 
     #[cfg(test)]
@@ -585,6 +641,8 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             quitting: false,
             #[cfg(unix)]
             hidden_to_tray: false,
+            #[cfg(unix)]
+            notifications: notification::NotificationBridge::default(),
         }
     }
 
@@ -628,15 +686,22 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         self.status = Some("Pairing secret copied to the clipboard.".to_owned());
     }
 
-    fn send_clipboard_from_ui(&mut self) {
-        self.status = Some(if !self.settings.sync_clipboard_to_mac {
-            "Enable Deck-to-Mac clipboard sharing in Settings first.".to_owned()
+    fn send_clipboard_from_ui(&mut self) -> bool {
+        let result = if !self.settings.sync_clipboard_to_mac {
+            Err("Enable Deck-to-Mac clipboard sharing in Settings first.".to_owned())
         } else {
-            match self.process.send_clipboard() {
-                Ok(()) => "Sending clipboard to Mac…".to_owned(),
-                Err(error) => error,
+            self.process.send_clipboard()
+        };
+        match result {
+            Ok(()) => {
+                self.status = Some("Sending clipboard to Mac…".to_owned());
+                true
             }
-        });
+            Err(error) => {
+                self.status = Some(error);
+                false
+            }
+        }
     }
 
     fn regenerate_pairing_secret_from_ui(&mut self) {
@@ -948,14 +1013,16 @@ impl eframe::App for ReceiverApp<ReceiverProcess> {
             if self.hidden_to_tray {
                 context.request_repaint_after(HIDDEN_TRAY_HEALTH_CHECK);
             }
+            self.poll_notifications(context, Instant::now());
         }
-        if let Some(message) = self
+        let messages: Vec<_> = self
             .process
             .diagnostics
             .as_ref()
-            .and_then(|rx| rx.try_iter().last())
-        {
-            self.status = Some(message);
+            .map(|rx| rx.try_iter().collect())
+            .unwrap_or_default();
+        for message in messages {
+            self.handle_clipboard_diagnostic(context, message);
         }
         if !self.gamepad_start_attempted {
             self.gamepad_start_attempted = true;
@@ -1272,6 +1339,7 @@ mod tests {
         calls: Vec<&'static str>,
         start_error: Option<String>,
         stop_error: Option<String>,
+        send_error: Option<String>,
     }
 
     impl ReceiverSupervisor for FakeReceiverProcess {
@@ -1299,7 +1367,7 @@ mod tests {
 
         fn send_clipboard(&mut self) -> Result<(), String> {
             self.calls.push("send_clipboard");
-            Ok(())
+            self.send_error.clone().map_or(Ok(()), Err)
         }
     }
 
@@ -1330,6 +1398,88 @@ mod tests {
         app.handle_tray_action(&context, tray::Action::Quit);
         assert!(app.quitting);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hidden_tray_errors_request_safe_notifications_and_delivery_failure_restores_window() {
+        let directory = unique_test_directory("tray-notifications");
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            directory.join(CONFIG_FILE),
+            FakeReceiverProcess {
+                start_error: Some("sensitive detail".into()),
+                ..Default::default()
+            },
+        );
+        let context = egui::Context::default();
+        app.hidden_to_tray = true;
+        app.handle_tray_action(&context, tray::Action::Toggle);
+        assert_eq!(
+            app.notifications.pending_message(),
+            Some("Could not change Mac input. Open MacDeck to check its settings and permissions.")
+        );
+        assert!(app.hidden_to_tray);
+
+        app.notifications =
+            notification::NotificationBridge::resolved_for_test("safe failure", true);
+        app.poll_notifications(&context, Instant::now());
+        assert!(app.hidden_to_tray);
+        app.notifications =
+            notification::NotificationBridge::resolved_for_test("safe failure", false);
+        app.poll_notifications(&context, Instant::now());
+        assert!(!app.hidden_to_tray);
+        assert_eq!(app.status.as_deref(), Some("safe failure"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hidden_clipboard_failure_notifies_but_success_does_not() {
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings::default(),
+            PathBuf::new(),
+            FakeReceiverProcess::default(),
+        );
+        let context = egui::Context::default();
+        app.hidden_to_tray = true;
+        app.handle_clipboard_diagnostic(&context, "Clipboard received by Mac.");
+        assert!(app.notifications.pending_message().is_none());
+        app.handle_clipboard_diagnostic(
+            &context,
+            "Connect to the Mac and enable clipboard sharing on both devices.",
+        );
+        assert_eq!(
+            app.notifications.pending_message(),
+            Some("Connect to the Mac and enable clipboard sharing on both devices.")
+        );
+        assert!(app.hidden_to_tray);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hidden_synchronous_clipboard_failure_uses_safe_notification() {
+        let mut app = ReceiverApp::with_process(
+            ReceiverSettings {
+                sync_clipboard_to_mac: true,
+                ..Default::default()
+            },
+            PathBuf::new(),
+            FakeReceiverProcess {
+                send_error: Some("private error".into()),
+                ..Default::default()
+            },
+        );
+        let context = egui::Context::default();
+        app.hidden_to_tray = true;
+        app.handle_tray_action(&context, tray::Action::SendClipboard);
+        assert_eq!(
+            app.notifications.pending_message(),
+            Some(
+                "Could not send the clipboard. Open MacDeck and check the connection and settings."
+            )
+        );
+        assert!(app.hidden_to_tray);
     }
 
     #[test]
@@ -1687,6 +1837,8 @@ mod tests {
             quitting: false,
             #[cfg(unix)]
             hidden_to_tray: false,
+            #[cfg(unix)]
+            notifications: notification::NotificationBridge::default(),
         };
         app.settings.bind = "127.0.0.1:4343".to_owned();
         app.apply_settings().unwrap();
