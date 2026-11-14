@@ -818,28 +818,15 @@ fn handle_gamepad_focus(
 fn controller_navigation_enabled_from_environment(
     current_desktop: Option<&str>,
     session_desktop: Option<&str>,
-    steam_app_id: Option<&str>,
-    steam_game_id: Option<&str>,
 ) -> bool {
     current_desktop.is_some_and(|desktop| desktop.to_ascii_lowercase().contains("gamescope"))
-        || session_desktop
-            .is_some_and(|desktop| desktop.to_ascii_lowercase().contains("gamescope"))
-        // Steam sets SteamAppId for applications launched from Gaming Mode.
-        // SteamGameId is not set consistently for non-Steam shortcuts, so
-        // accepting both is essential for the installed desktop entry.
-        || steam_app_id.is_some_and(|id| !id.trim().is_empty())
-        || steam_game_id.is_some_and(|id| !id.trim().is_empty())
+        || session_desktop.is_some_and(|desktop| desktop.to_ascii_lowercase().contains("gamescope"))
 }
 
 fn controller_navigation_enabled() -> bool {
     controller_navigation_enabled_from_environment(
         env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
         env::var("XDG_SESSION_DESKTOP").ok().as_deref(),
-        env::var("SteamAppId")
-            .or_else(|_| env::var("STEAM_APP_ID"))
-            .ok()
-            .as_deref(),
-        env::var("SteamGameId").ok().as_deref(),
     )
 }
 
@@ -1357,37 +1344,22 @@ mod tests {
     }
 
     #[test]
-    fn controller_navigation_is_enabled_in_gaming_mode() {
+    fn controller_navigation_uses_session_not_steam_application_ids() {
         assert!(controller_navigation_enabled_from_environment(
             Some("gamescope"),
             None,
-            None,
-            None
-        ));
-        assert!(controller_navigation_enabled_from_environment(
-            Some("KDE"),
-            None,
-            Some("480"),
-            Some("123456")
-        ));
-        assert!(controller_navigation_enabled_from_environment(
-            Some("KDE"),
-            None,
-            Some("480"),
-            None
         ));
         assert!(controller_navigation_enabled_from_environment(
             Some("KDE"),
             Some("gamescope"),
-            None,
-            None
         ));
+        // Steam application IDs can be set for Desktop Mode shortcuts too;
+        // they are not evidence of a Gamescope session.
         assert!(!controller_navigation_enabled_from_environment(
             Some("KDE"),
-            Some("KDE"),
-            None,
-            None
+            Some("plasma"),
         ));
+        assert!(!controller_navigation_enabled_from_environment(None, None));
     }
 
     #[test]
