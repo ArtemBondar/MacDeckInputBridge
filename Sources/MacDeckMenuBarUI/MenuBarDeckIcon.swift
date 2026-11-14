@@ -1,7 +1,7 @@
 import AppKit
 
-/// Status artwork based on the supplied Steam Deck logo SVGs. Local and
-/// connecting images are templates, so macOS supplies the menu bar foreground.
+/// Solid Steam Deck-inspired artwork. Local and connecting images are
+/// templates, so macOS supplies the menu bar foreground.
 public enum MenuBarDeckIcon {
     public static let connectingFrameCount = 42
     public static let connectingFrameInterval: TimeInterval = 1.4 / Double(connectingFrameCount)
@@ -26,42 +26,31 @@ public enum MenuBarDeckIcon {
 
             // Coordinates reproduce the 18 × 18 SVGs, inset by one point.
             let center = NSPoint(x: 7.7, y: 10)
-            let outline = status != .remote
-            let outer: CGFloat = outline ? 7.3 : 7.8
-            let inner: CGFloat = outline ? 5.1 : 4.6
+            let outer: CGFloat = 7.8
+            let inner: CGFloat = 4.6
             let ring = NSBezierPath()
             ring.move(to: NSPoint(x: center.x, y: center.y - outer))
             ring.appendArc(withCenter: center, radius: outer, startAngle: -90, endAngle: 90)
             ring.line(to: NSPoint(x: center.x, y: center.y + inner))
             ring.appendArc(withCenter: center, radius: inner, startAngle: 90, endAngle: -90, clockwise: true)
             ring.close()
-            if outline {
-                ring.lineWidth = 1
-                ring.stroke()
-            } else {
-                ring.fill()
-            }
+            ring.fill()
 
-            let radius: CGFloat = outline ? 2.7 : 3.2
+            let radius: CGFloat = 3.2
             let circle = NSBezierPath(ovalIn: NSRect(
                 x: center.x - radius, y: center.y - radius,
                 width: radius * 2, height: radius * 2
             ))
-            if outline {
-                circle.lineWidth = 1
-                circle.stroke()
-                // The dot grows and shrinks independently of the outline, so
-                // connecting never resembles the fully filled remote state.
-                if status == .connecting {
-                    let phase = ((connectingPhase % connectingFrameCount) + connectingFrameCount) % connectingFrameCount
-                    let opacity = 0.5 - 0.5 * cos(2 * .pi * Double(phase) / Double(connectingFrameCount))
-                    NSColor.white.withAlphaComponent(opacity).setFill()
-                    NSBezierPath(ovalIn: NSRect(
-                        x: center.x - 2.2, y: center.y - 2.2,
-                        width: 4.4, height: 4.4
-                    )).fill()
-                }
-            } else {
+            switch status {
+            case .local:
+                circle.fill()
+            case .connecting:
+                let phase = ((connectingPhase % connectingFrameCount) + connectingFrameCount) % connectingFrameCount
+                // Pulse the filled center while retaining the same solid logo.
+                let opacity = 0.25 + 0.75 * (0.5 - 0.5 * cos(2 * .pi * Double(phase) / Double(connectingFrameCount)))
+                NSColor.white.withAlphaComponent(opacity).setFill()
+                circle.fill()
+            case .remote:
                 NSColor(calibratedRed: 26 / 255, green: 159 / 255, blue: 1, alpha: 1).setFill()
                 circle.fill()
             }

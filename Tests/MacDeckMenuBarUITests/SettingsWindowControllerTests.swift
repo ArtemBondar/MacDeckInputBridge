@@ -11,6 +11,10 @@ final class SettingsWindowControllerTests: XCTestCase {
             saved = $0
             return nil
         }
+        XCTAssertEqual(
+            controller.iconPreviews[0].image?.tiffRepresentation,
+            MenuBarDeckIcon.image(for: .local, connectingPhase: 21, style: .logo).tiffRepresentation
+        )
         let logo = try XCTUnwrap(controller.iconPreviews[2].image?.tiffRepresentation)
         controller.iconStylePopup.selectItem(at: 1)
         NSApp.sendAction(controller.iconStylePopup.action!, to: controller.iconStylePopup.target, from: controller.iconStylePopup)
@@ -291,10 +295,10 @@ final class SettingsWindowControllerTests: XCTestCase {
             XCTAssertEqual(image.size.height, 22)
         }
 
-        XCTAssertEqual(
+        XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .local).tiffRepresentation,
             MenuBarDeckIcon.image(for: .connecting).tiffRepresentation,
-            "The first CONNECTING frame intentionally starts with zero dots."
+            "Connecting begins with a dimmed filled center."
         )
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .local).tiffRepresentation,
@@ -313,7 +317,7 @@ final class SettingsWindowControllerTests: XCTestCase {
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 0).tiffRepresentation,
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 21).tiffRepresentation,
-            "The connecting center pulses between empty and filled."
+            "The connecting center pulses between dim and full."
         )
         XCTAssertNotEqual(
             MenuBarDeckIcon.image(for: .connecting, connectingPhase: 10).tiffRepresentation,
