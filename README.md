@@ -1,5 +1,7 @@
 # MacDeckInputBridge
 
+[Project website](https://artembondar.github.io/MacDeckInputBridge/) · [Download](https://github.com/ArtemBondar/MacDeckInputBridge/releases/latest)
+
 <p align="center">
   <img src="assets/MacDeckInputBridgeIcon.png" width="256" height="256" alt="MacDeckInputBridge">
 </p>
