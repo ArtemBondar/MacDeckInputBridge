@@ -2500,6 +2500,16 @@ mod receiver_socket_tests {
     use super::*;
     use std::{collections::BTreeSet, sync::mpsc};
 
+    // Loopback I/O and worker notifications should finish promptly; this
+    // generous bound allows for scheduling delays on shared CI runners.
+    const SOCKET_TEST_WAIT: Duration = Duration::from_secs(2);
+    // Allow the server time beyond its deadline to be scheduled and close the
+    // connection, without letting a stalled test wait indefinitely.
+    const DEADLINE_SCHEDULING_ALLOWANCE: Duration = Duration::from_secs(3);
+    // Every byte arrives well within HANDSHAKE_TIMEOUT. A per-read timeout
+    // would therefore keep resetting, whereas the absolute deadline expires.
+    const TRICKLE_INTERVAL: Duration = Duration::from_millis(50);
+
     struct RecordingSink {
         held: Arc<Mutex<BTreeSet<u16>>>,
         events: mpsc::Sender<()>,
@@ -2556,12 +2566,8 @@ mod receiver_socket_tests {
 
         fn connect(&self) -> TcpStream {
             let stream = TcpStream::connect(self.address).unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            stream
-                .set_write_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
+            stream.set_read_timeout(Some(SOCKET_TEST_WAIT)).unwrap();
+            stream.set_write_timeout(Some(SOCKET_TEST_WAIT)).unwrap();
             stream
         }
     }
@@ -2609,7 +2615,7 @@ mod receiver_socket_tests {
         // Interrupt one real handshake. Retry while its worker releases the
         // slot; no arbitrary fixed wait is used to assume worker scheduling.
         drop(pending.pop());
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + SOCKET_TEST_WAIT;
         loop {
             let mut client = server.connect();
             if let Ok(challenge) = mac_deck_receiver::read_server_hello(&mut client) {
@@ -2639,14 +2645,14 @@ mod receiver_socket_tests {
         let server = TestServer::start(pairing.clone(), sink);
         let mut client = server.connect();
         client
-            .set_read_timeout(Some(HANDSHAKE_TIMEOUT + Duration::from_secs(3)))
+            .set_read_timeout(Some(HANDSHAKE_TIMEOUT + DEADLINE_SCHEDULING_ALLOWANCE))
             .unwrap();
         mac_deck_receiver::read_server_hello(&mut client).unwrap();
         client.write_all(&4096u32.to_be_bytes()).unwrap();
         let mut writer = client.try_clone().unwrap();
         let (stop_tx, stop_rx) = mpsc::channel();
         let worker = thread::spawn(move || {
-            while stop_rx.recv_timeout(Duration::from_millis(50)).is_err() {
+            while stop_rx.recv_timeout(TRICKLE_INTERVAL).is_err() {
                 if writer.write_all(&[0]).is_err() {
                     break;
                 }
@@ -2691,7 +2697,7 @@ mod receiver_socket_tests {
         session
             .write_packet(&mut client, 1, &Packet::Key { code: 30, value: 1 })
             .unwrap();
-        events.recv_timeout(Duration::from_secs(2)).unwrap();
+        events.recv_timeout(SOCKET_TEST_WAIT).unwrap();
         assert!(held.lock().unwrap().contains(&30));
 
         server.shutdown.store(true, Ordering::Release);
