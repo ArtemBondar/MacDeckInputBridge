@@ -43,7 +43,9 @@ cat > "$contents/Info.plist" <<'PLIST'
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleName</key>
-  <string>MacDeckInputBridge</string>
+  <string>MacDeck</string>
+  <key>CFBundleDisplayName</key>
+  <string>MacDeck</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
