@@ -725,7 +725,9 @@ struct PlasmaLayoutSwitcher {
 struct ConfiguredLayout {
     index: u8,
     xkb_code: String,
+    variant: String,
     description: String,
+    canonical_description: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1024,8 +1026,15 @@ fn qdbus_failure_description(prefix: &str, output: &Output) -> String {
 }
 
 fn configured_plasma_layouts(qdbus: &Path) -> Vec<ConfiguredLayout> {
-    let runtime = runtime_plasma_layouts(qdbus);
+    let mut runtime = runtime_plasma_layouts(qdbus);
     if !runtime.is_empty() {
+        let descriptions = read_xkb_layout_descriptions();
+        for layout in &mut runtime {
+            layout.canonical_description = descriptions
+                .get(&layout.xkb_code)
+                .cloned()
+                .unwrap_or_default();
+        }
         return runtime;
     }
     let Some(layout_list) = read_kxkbrc_layout_list() else {
@@ -1035,7 +1044,7 @@ fn configured_plasma_layouts(qdbus: &Path) -> Vec<ConfiguredLayout> {
     layout_list
         .into_iter()
         .enumerate()
-        .filter_map(|(index, code)| {
+        .filter_map(|(index, (code, variant))| {
             let index = u8::try_from(index).ok()?;
             // A minimal SteamOS installation can expose kxkbrc before the XKB
             // rule-description file is available. Keep the layout visible to
@@ -1047,6 +1056,8 @@ fn configured_plasma_layouts(qdbus: &Path) -> Vec<ConfiguredLayout> {
             Some(ConfiguredLayout {
                 index,
                 xkb_code: code,
+                variant,
+                canonical_description: description.clone(),
                 description,
             })
         })
@@ -1083,7 +1094,7 @@ fn parse_qdbus_layout_list(output: &str) -> Vec<ConfiguredLayout> {
         let Some((layout, after_layout)) = next_qdbus_quoted_string(remainder) else {
             break;
         };
-        let Some((_variant, after_variant)) = next_qdbus_quoted_string(after_layout) else {
+        let Some((variant, after_variant)) = next_qdbus_quoted_string(after_layout) else {
             break;
         };
         let Some((description, after_description)) = next_qdbus_quoted_string(after_variant) else {
@@ -1095,7 +1106,9 @@ fn parse_qdbus_layout_list(output: &str) -> Vec<ConfiguredLayout> {
         layouts.push(ConfiguredLayout {
             index,
             xkb_code: layout,
+            variant,
             description,
+            canonical_description: String::new(),
         });
         remainder = after_description;
     }
@@ -1119,35 +1132,48 @@ fn next_qdbus_quoted_string(value: &str) -> Option<(String, &str)> {
     None
 }
 
-fn read_kxkbrc_layout_list() -> Option<Vec<String>> {
+fn read_kxkbrc_layout_list() -> Option<Vec<(String, String)>> {
     let root = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    let contents = std::fs::read_to_string(root.join("kxkbrc")).ok()?;
+    parse_kxkbrc_layout_list(&std::fs::read_to_string(root.join("kxkbrc")).ok()?)
+}
+
+fn parse_kxkbrc_layout_list(contents: &str) -> Option<Vec<(String, String)>> {
     let mut in_layout_section = false;
+    let mut layouts = None;
+    let mut variants = None;
     for line in contents.lines() {
         let line = line.trim();
         if line.starts_with('[') && line.ends_with(']') {
             in_layout_section = line == "[Layout]";
-            continue;
-        }
-        if in_layout_section {
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            if key.trim() == "LayoutList" {
-                return Some(
-                    value
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|code| !code.is_empty())
-                        .map(str::to_owned)
-                        .collect(),
-                );
+        } else if in_layout_section {
+            if let Some((key, value)) = line.split_once('=') {
+                match key.trim() {
+                    "LayoutList" => layouts = Some(value),
+                    "VariantList" => variants = Some(value),
+                    _ => {}
+                }
             }
         }
     }
-    None
+    let variants: Vec<&str> = variants.unwrap_or("").split(',').map(str::trim).collect();
+    Some(
+        layouts?
+            .split(',')
+            .enumerate()
+            .filter_map(|(index, code)| {
+                let code = code.trim();
+                if code.is_empty() {
+                    return None;
+                }
+                Some((
+                    code.to_owned(),
+                    variants.get(index).copied().unwrap_or("").to_owned(),
+                ))
+            })
+            .collect(),
+    )
 }
 
 fn read_xkb_layout_descriptions() -> BTreeMap<String, String> {
@@ -1210,54 +1236,39 @@ fn automatic_layout_candidates(
     mac_input_source: &str,
     configured_layouts: &[ConfiguredLayout],
 ) -> Vec<u8> {
-    let Some(source_name) = mac_input_source.rsplit('.').next() else {
+    // Custom input sources require an explicit mapping. A coincidental suffix
+    // must never silently select a layout with different key positions.
+    let Some(source_name) = mac_input_source.strip_prefix("com.apple.keylayout.") else {
         return Vec::new();
     };
-    let mut source_terms = layout_match_terms(source_name);
-    // macOS calls its standard US physical keyboard source "ABC", whereas
-    // XKB/Plasma calls the same layout "us". Treat this as a platform alias,
-    // not a user-specific language mapping, so no manual rule is required.
-    if source_terms.iter().any(|term| term == "abc")
-        && !source_terms.iter().any(|term| term == "us")
-    {
-        source_terms.push("us".to_owned());
-    }
-    if source_terms.is_empty() {
+    let source = normalize_layout_name(source_name);
+    let base_source = source_name.strip_suffix("-PC").unwrap_or(source_name);
+    let base = normalize_layout_name(base_source);
+    if base.is_empty() {
         return Vec::new();
     }
+    let source_is_us = base == "abc" || base == "us";
     configured_layouts
         .iter()
         .filter(|layout| {
-            let mut layout_terms = layout_match_terms(&layout.xkb_code);
-            layout_terms.extend(layout_match_terms(&layout.description));
-            source_terms.iter().any(|source_term| {
-                // A Mac source ID often adds a hardware or variant suffix,
-                // for example `Ukrainian-PC`. Match its meaningful pieces to
-                // the configured XKB code/description without enumerating
-                // languages. Multiple candidate layouts remain intentionally
-                // ambiguous and therefore do not trigger a switch.
-                layout_terms
-                    .iter()
-                    .any(|layout_term| layout_term == source_term)
-            })
+            let code = normalize_layout_name(&layout.xkb_code);
+            let description = normalize_layout_name(&layout.description);
+            let canonical = normalize_layout_name(&layout.canonical_description);
+            // A variant may be selected only on an exact full-name match. In
+            // particular, matching "US" to us(intl) changes punctuation silently.
+            if !layout.variant.is_empty() {
+                return !canonical.is_empty()
+                    && description != canonical
+                    && source == description
+                    && !description.is_empty();
+            }
+            code == base
+                || description == base
+                || (!canonical.is_empty() && canonical == base)
+                || (source_is_us && code == "us")
         })
         .map(|layout| layout.index)
         .collect()
-}
-
-fn layout_match_terms(value: &str) -> Vec<String> {
-    let whole = normalize_layout_name(value);
-    let mut terms = Vec::new();
-    if !whole.is_empty() {
-        terms.push(whole);
-    }
-    for word in value.split(|character: char| !character.is_alphanumeric()) {
-        let normalized = normalize_layout_name(word);
-        if !normalized.is_empty() && !terms.contains(&normalized) {
-            terms.push(normalized);
-        }
-    }
-    terms
 }
 
 fn normalize_layout_name(value: &str) -> String {
@@ -2195,16 +2206,22 @@ mod receiver_tests {
             ConfiguredLayout {
                 index: 0,
                 xkb_code: "us".to_owned(),
+                variant: String::new(),
+                canonical_description: String::new(),
                 description: "English (US)".to_owned(),
             },
             ConfiguredLayout {
                 index: 1,
                 xkb_code: "ua".to_owned(),
+                variant: String::new(),
+                canonical_description: String::new(),
                 description: "Ukrainian".to_owned(),
             },
             ConfiguredLayout {
                 index: 2,
                 xkb_code: "de".to_owned(),
+                variant: String::new(),
+                canonical_description: String::new(),
                 description: "German".to_owned(),
             },
         ];
@@ -2241,25 +2258,101 @@ mod receiver_tests {
             ConfiguredLayout {
                 index: 0,
                 xkb_code: "us".to_owned(),
+                variant: String::new(),
+                canonical_description: String::new(),
                 description: "English (US)".to_owned(),
             },
             ConfiguredLayout {
                 index: 1,
-                xkb_code: "us-intl".to_owned(),
+                xkb_code: "us".to_owned(),
+                variant: "intl".to_owned(),
+                canonical_description: String::new(),
                 description: "English (US, international)".to_owned(),
             },
         ];
         assert_eq!(
             automatic_layout_index("com.apple.keylayout.US", &ambiguous),
-            None
+            Some(0)
         );
         assert_eq!(
             automatic_layout_candidates("com.apple.keylayout.US", &ambiguous),
-            vec![0, 1]
+            vec![0]
         );
         assert_eq!(
             LayoutSwitchOutcome::UnchangedAmbiguous.description(),
             "multiple configured Deck layouts matched; left unchanged"
+        );
+    }
+
+    #[test]
+    fn standard_layout_matching_uses_canonical_names_and_rejects_partial_matches() {
+        let mut layouts = parse_qdbus_layout_list(
+            r#"[Argument: a(sss) {[Argument: (sss) "de", "", "Deutsch"], [Argument: (sss) "us", "intl", "English (US, international)"], [Argument: (sss) "ua", "", "Українська"]}]"#,
+        );
+        layouts[0].canonical_description = "German".into();
+        layouts[2].canonical_description = "Ukrainian".into();
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.German", &layouts),
+            Some(0)
+        );
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.Ukrainian-PC", &layouts),
+            Some(2)
+        );
+        // A variant with the same country code is not the standard layout.
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.US", &layouts),
+            None
+        );
+        // Words within unrelated names are not sufficient evidence.
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.English", &layouts),
+            None
+        );
+        assert_eq!(automatic_layout_index("org.example.German", &layouts), None);
+        assert_eq!(
+            automatic_layout_index("com.apple.keylayout.Unknown", &layouts),
+            None
+        );
+    }
+
+    #[test]
+    fn explicit_mapping_wins_and_duplicate_standard_matches_remain_ambiguous() {
+        let layouts = parse_qdbus_layout_list(
+            r#"[Argument: a(sss) {[Argument: (sss) "ua", "", "Ukrainian"], [Argument: (sss) "ua", "", "Ukrainian"]}]"#,
+        );
+        let mut switcher = PlasmaLayoutSwitcher {
+            qdbus: PathBuf::new(),
+            mappings: HashMap::new(),
+            automatic_layouts: layouts,
+        };
+        assert_eq!(
+            switcher.layout_selection("com.apple.keylayout.Ukrainian"),
+            LayoutSelection::UnchangedAmbiguous
+        );
+        switcher.mappings.insert("org.example.Custom".into(), 1);
+        switcher
+            .mappings
+            .insert("com.apple.keylayout.Ukrainian".into(), 0);
+        assert_eq!(
+            switcher.layout_selection("org.example.Custom"),
+            LayoutSelection::Override(1)
+        );
+        assert_eq!(
+            switcher.layout_selection("com.apple.keylayout.Ukrainian"),
+            LayoutSelection::Override(0)
+        );
+    }
+
+    #[test]
+    fn plasma_config_keeps_variant_positions_when_entries_are_empty() {
+        assert_eq!(
+            parse_kxkbrc_layout_list("[Layout]\nLayoutList=us,de,ua\nVariantList=,nodeadkeys,\n"),
+            Some(vec![
+                ("us".into(), "".into()),
+                ("de".into(), "nodeadkeys".into()),
+                ("ua".into(), "".into())
+            ])
         );
     }
 
@@ -2274,11 +2367,15 @@ mod receiver_tests {
                 ConfiguredLayout {
                     index: 0,
                     xkb_code: "us".to_owned(),
+                    variant: String::new(),
+                    canonical_description: String::new(),
                     description: "English (US)".to_owned(),
                 },
                 ConfiguredLayout {
                     index: 1,
                     xkb_code: "ua".to_owned(),
+                    variant: String::new(),
+                    canonical_description: String::new(),
                     description: "Ukrainian".to_owned(),
                 },
             ]
