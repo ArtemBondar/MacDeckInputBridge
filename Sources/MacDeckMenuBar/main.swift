@@ -53,7 +53,7 @@ private final class MenuBarModel: ObservableObject {
     @Published var pairingSecret: String
     @Published var iconStyle: MenuBarIconStyle
     @Published var showInDock: Bool
-    @Published var allowLocalSecretFallback: Bool
+    @Published var useKeychainForPairingSecret: Bool
     @Published var syncClipboardFromMac: Bool
     @Published var syncClipboardFromDeck: Bool
     @Published var status: SenderStatus = .local
@@ -73,16 +73,14 @@ private final class MenuBarModel: ObservableObject {
         port = String(settings.port)
         iconStyle = MenuBarIconStyle.load()
         showInDock = DockVisibilityPreference.load()
-        allowLocalSecretFallback = store.allowsLocalSecretFallback
+        useKeychainForPairingSecret = store.usesKeychainForPairingSecret
         syncClipboardFromMac = settings.syncClipboardFromMac
         syncClipboardFromDeck = settings.syncClipboardFromDeck
         do {
-            pairingSecret = try store.loadPairingSecret() ?? ""
+            pairingSecret = try store.loadSelectedPairingSecret() ?? ""
         } catch {
             pairingSecret = ""
-            message = allowLocalSecretFallback
-                ? "Keychain access is unavailable. Enter the pairing secret and save to use this Mac’s private local file."
-                : "Could not load the pairing secret. Enter it again in Settings."
+            message = "Could not load the pairing secret. Enter it again in Settings."
         }
         sender.statusChanged = { [weak self] mode in
             self?.setStatus(SenderStatus(mode: mode))
@@ -179,7 +177,7 @@ private final class MenuBarModel: ObservableObject {
                 pairingSecret: pairingSecret,
                 showInDock: showInDock,
                 iconStyle: iconStyle,
-                allowLocalSecretFallback: allowLocalSecretFallback,
+                useKeychainForPairingSecret: useKeychainForPairingSecret,
                 syncClipboardFromMac: syncClipboardFromMac,
                 syncClipboardFromDeck: syncClipboardFromDeck,
                 currentInputSourceID: SenderController.currentKeyboardLayoutIdentifier()
@@ -196,13 +194,12 @@ private final class MenuBarModel: ObservableObject {
             port = draft.port
             pairingSecret = draft.pairingSecret
             showInDock = draft.showInDock
-            allowLocalSecretFallback = draft.allowLocalSecretFallback
             syncClipboardFromMac = draft.syncClipboardFromMac
             syncClipboardFromDeck = draft.syncClipboardFromDeck
             let settings = try settingsFromFields()
+            let persistence = try store.saveSelectedPairingSecret(pairingSecret, useKeychain: draft.useKeychainForPairingSecret)
+            useKeychainForPairingSecret = draft.useKeychainForPairingSecret
             try store.saveSettings(settings)
-            try store.setAllowsLocalSecretFallback(allowLocalSecretFallback)
-            let persistence = try store.savePairingSecret(pairingSecret)
             DockVisibilityPreference.save(showInDock: showInDock)
             iconStyle = draft.iconStyle
             iconStyle.save()
@@ -210,7 +207,7 @@ private final class MenuBarModel: ObservableObject {
             case .keychain:
                 "Saved. The next toggle will use these settings."
             case .localPrivateFile:
-                "Saved in this Mac’s private app-data folder because Keychain access is unavailable."
+                "Saved in this Mac’s private app-data folder."
             case .memoryOnly:
                 "Keychain access is unavailable. The secret will be used only until this app quits."
             }
@@ -271,7 +268,7 @@ private final class MenuBarModel: ObservableObject {
         guard !started else { return }
         let settings = try settingsFromFields()
         try store.saveSettings(settings)
-        let persistence = try store.savePairingSecret(pairingSecret)
+        let persistence = try store.saveSelectedPairingSecret(pairingSecret, useKeychain: useKeychainForPairingSecret)
         if persistence == .memoryOnly {
             message = "Keychain access is unavailable. The secret will be used only until this app quits."
         }
@@ -331,11 +328,6 @@ private struct MenuContentView: View {
         Text("Shortcut: ⌃⇧F12")
             .font(.caption)
             .foregroundStyle(.primary.opacity(0.78))
-        if model.status == .remote, model.syncClipboardFromMac {
-            Button("Send Mac clipboard now") {
-                model.sendCurrentClipboard()
-            }
-        }
         if let message = model.message, model.status == .remote {
             Text(message)
         }
