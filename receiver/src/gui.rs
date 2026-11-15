@@ -476,6 +476,7 @@ enum FocusTarget {
     LayoutMappings,
     CheckLayoutSync,
     RefreshSettingsAddresses,
+    AboutGithub,
     HideTaskbar,
 }
 
@@ -492,7 +493,7 @@ impl FocusTarget {
         Self::ToggleReceiver,
         Self::RefreshControlAddresses,
     ];
-    const SETTINGS_ORDER: [Self; 14] = [
+    const SETTINGS_ORDER: [Self; 15] = [
         Self::ControlTab,
         Self::SettingsTab,
         Self::ListenAddress,
@@ -507,6 +508,7 @@ impl FocusTarget {
         Self::LayoutMappings,
         Self::CheckLayoutSync,
         Self::RefreshSettingsAddresses,
+        Self::AboutGithub,
     ];
 
     fn order(tab: Tab, layout_sync_enabled: bool) -> Vec<Self> {
@@ -927,6 +929,13 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
         }
         ui.add_space(8.0);
         ui.small("Use one of these addresses as --host in the Mac sender settings.");
+        ui.add_space(20.0);
+        ui.separator();
+        ui.heading("About MacDeck");
+        ui.label(format!("Version {}", include_str!("../../VERSION").trim()));
+        ui.label("Developed by Artem Bondar");
+        let response = ui.hyperlink_to("github.com/ArtemBondar", "https://github.com/ArtemBondar");
+        track_focus(focus_widgets, FocusTarget::AboutGithub, &response);
     }
 }
 
@@ -2071,6 +2080,7 @@ mod tests {
         assert!(settings_with_mappings.contains(&FocusTarget::SyncClipboardToMac));
         assert!(settings_with_mappings.contains(&FocusTarget::CheckLayoutSync));
         assert!(settings_with_mappings.contains(&FocusTarget::RefreshSettingsAddresses));
+        assert!(settings_with_mappings.contains(&FocusTarget::AboutGithub));
     }
 
     #[test]
