@@ -34,8 +34,6 @@ cat > "$contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleDisplayName</key>
-  <string>MacDeckInputBridge</string>
   <key>CFBundleExecutable</key>
   <string>MacDeckInputBridge</string>
   <key>CFBundleIdentifier</key>
@@ -49,9 +47,9 @@ cat > "$contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>$app_version</string>
+  <string>0</string>
   <key>CFBundleVersion</key>
-  <string>$build_number</string>
+  <string>0</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>LSUIElement</key>
@@ -59,6 +57,10 @@ cat > "$contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $app_version" "$contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$contents/Info.plist"
+/usr/bin/plutil -lint "$contents/Info.plist"
 
 # Accessibility trust is associated with the app's designated requirement.
 # An Apple Development certificate supplies a stable requirement across local
