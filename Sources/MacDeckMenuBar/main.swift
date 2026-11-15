@@ -332,6 +332,15 @@ private struct MenuContentView: View {
             Text(message)
         }
         Divider()
+        Button("About MacDeckInputBridge…") {
+            let credits = NSMutableAttributedString(string: "Developed by Artem Bondar\n")
+            credits.append(NSAttributedString(
+                string: "github.com/ArtemBondar",
+                attributes: [.link: URL(string: "https://github.com/ArtemBondar")!]
+            ))
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+        }
         Button("Settings…") {
             model.showSettings()
         }
