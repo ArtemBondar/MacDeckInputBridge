@@ -920,6 +920,9 @@ fn select_qdbus(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf
 // exhaust receiver memory while avoiding pipe-buffer deadlocks on larger lists.
 const QDBUS_OUTPUT_LIMIT: usize = 1024 * 1024;
 const QDBUS_TIMEOUT: Duration = Duration::from_secs(1);
+// This loop runs only during a qdbus call (at most one second), not while idle.
+// Pipe readiness alone cannot signal a child that closes its pipes before exit;
+// polling try_wait also covers that case without Linux-specific pidfd support.
 const QDBUS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 fn nonblocking_pipe(pipe: &impl AsRawFd) -> io::Result<()> {
@@ -2470,6 +2473,17 @@ mod receiver_tests {
         assert_eq!(excess.unwrap_err().kind(), io::ErrorKind::InvalidData);
         let timeout = qdbus_call(Path::new("/bin/sh"), &["-c", "exec sleep 2"]);
         assert_eq!(timeout.unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn qdbus_times_out_when_child_closes_pipes_but_keeps_running() {
+        let start = Instant::now();
+        let result = qdbus_call(
+            Path::new("/bin/sh"),
+            &["-c", "exec 1>&- 2>&-; exec sleep 30"],
+        );
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(start.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

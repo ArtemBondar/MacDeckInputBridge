@@ -234,6 +234,8 @@ fn stop_child_retaining_handle(
 
 // SIGTERM permits held-key release; SIGKILL is a bounded fallback.
 const RECEIVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+// This polling happens only while stopping a child; normal operation does not
+// wake every 25 ms. try_wait reaps an exited child and works on stock SteamOS.
 const RECEIVER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 fn request_graceful_shutdown(child: &mut Child) -> Result<(), String> {
@@ -1555,6 +1557,31 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_reaps_child_that_handles_term() {
+        use std::io::BufRead;
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("sh")
+            .args([
+                "-c",
+                "trap 'exit 0' TERM; echo ready; while :; do read line || :; done",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        let start = std::time::Instant::now();
+        super::request_graceful_shutdown(&mut child).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    }
+
     #[cfg(unix)]
     #[test]
     fn shutdown_force_stops_child_that_ignores_term() {
