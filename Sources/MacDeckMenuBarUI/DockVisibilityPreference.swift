@@ -6,7 +6,7 @@ public enum DockVisibilityPreference {
     public static let userDefaultsKey = "showDockIcon"
 
     public static func load(from defaults: UserDefaults = .standard) -> Bool {
-        guard defaults.object(forKey: userDefaultsKey) != nil else { return true }
+        guard defaults.object(forKey: userDefaultsKey) != nil else { return false }
         return defaults.bool(forKey: userDefaultsKey)
     }
 
