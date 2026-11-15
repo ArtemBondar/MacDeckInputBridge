@@ -1563,7 +1563,10 @@ mod tests {
         use std::io::BufRead;
         use std::process::{Command, Stdio};
         let mut child = Command::new("sh")
-            .args(["-c", "trap 'exit 0' TERM; echo ready; while :; do read line || :; done"])
+            .args([
+                "-c",
+                "trap 'exit 0' TERM; echo ready; while :; do read line || :; done",
+            ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
