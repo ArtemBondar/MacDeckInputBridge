@@ -29,6 +29,13 @@ const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(200);
 // Once a frame starts, do not let a stalled or trickling peer hold keys forever.
 const SESSION_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PENDING_HANDSHAKES: usize = 4;
+fn reserve_handshake_slot(pending: &AtomicUsize) -> bool {
+    pending
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            (count < MAX_PENDING_HANDSHAKES).then_some(count + 1)
+        })
+        .is_ok()
+}
 // Bound shutdown latency when no clients connect; readiness wakes immediately.
 const LISTENER_POLL_MILLIS: libc::c_int = 200;
 
@@ -53,6 +60,27 @@ fn wait_for_listener(listener: &impl AsRawFd) -> io::Result<()> {
 #[cfg(test)]
 mod listener_readiness_tests {
     use super::*;
+
+    #[test]
+    fn concurrent_handshakes_never_exceed_the_pending_limit() {
+        let pending = Arc::new(AtomicUsize::new(0));
+        let workers: Vec<_> = (0..32)
+            .map(|_| {
+                let pending = Arc::clone(&pending);
+                thread::spawn(move || reserve_handshake_slot(&pending))
+            })
+            .collect();
+        let accepted = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .filter(|accepted| *accepted)
+            .count();
+        assert_eq!(accepted, MAX_PENDING_HANDSHAKES);
+        assert_eq!(pending.load(Ordering::Acquire), MAX_PENDING_HANDSHAKES);
+        pending.fetch_sub(1, Ordering::AcqRel);
+        assert!(reserve_handshake_slot(&pending));
+        assert!(!reserve_handshake_slot(&pending));
+    }
 
     #[test]
     fn listener_wait_handles_idle_and_readiness() {
@@ -1506,11 +1534,7 @@ fn serve(
     while !shutdown.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((mut stream, _)) => {
-                let accepted = pending_handshakes
-                    .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                        (count < MAX_PENDING_HANDSHAKES).then_some(count + 1)
-                    })
-                    .is_ok();
+                let accepted = reserve_handshake_slot(&pending_handshakes);
                 if !accepted {
                     let _ = stream.shutdown(Shutdown::Both);
                     continue;
