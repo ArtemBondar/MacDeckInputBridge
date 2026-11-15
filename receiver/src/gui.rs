@@ -232,6 +232,10 @@ fn stop_child_retaining_handle(
     Ok(())
 }
 
+// SIGTERM permits held-key release; SIGKILL is a bounded fallback.
+const RECEIVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const RECEIVER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
 fn request_graceful_shutdown(child: &mut Child) -> Result<(), String> {
     #[cfg(unix)]
     {
@@ -245,11 +249,11 @@ fn request_graceful_shutdown(child: &mut Child) -> Result<(), String> {
                 io::Error::last_os_error()
             ));
         }
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + RECEIVER_SHUTDOWN_TIMEOUT;
         while Instant::now() < deadline {
             match child.try_wait() {
                 Ok(Some(_)) => return Ok(()),
-                Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+                Ok(None) => std::thread::sleep(RECEIVER_EXIT_POLL_INTERVAL),
                 Err(error) => return Err(format!("Could not inspect receiver shutdown: {error}")),
             }
         }
@@ -1551,6 +1555,26 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_force_stops_child_that_ignores_term() {
+        use std::io::BufRead;
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("sh")
+            .args(["-c", "trap '' TERM; echo ready; exec sleep 30"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        super::request_graceful_shutdown(&mut child).unwrap();
+        assert_eq!(child.wait().unwrap().signal(), Some(libc::SIGKILL));
+    }
+
     #[test]
     fn receiver_handle_is_retained_when_shutdown_fails_and_cleared_after_retry() {
         let mut child = Some(
