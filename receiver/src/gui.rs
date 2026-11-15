@@ -147,7 +147,10 @@ impl ReceiverSupervisor for ReceiverProcess {
     fn is_running(&mut self) -> bool {
         match self.child.as_mut().map(Child::try_wait) {
             Some(Ok(None)) => true,
-            Some(Ok(Some(_))) | Some(Err(_)) | None => {
+            // An inspection error does not prove the process exited. Keep its
+            // handle so a later stop can still release the virtual keyboard.
+            Some(Err(_)) => true,
+            Some(Ok(Some(_))) | None => {
                 self.child = None;
                 false
             }
@@ -193,17 +196,15 @@ impl ReceiverSupervisor for ReceiverProcess {
     }
 
     fn stop(&mut self) -> Result<(), String> {
-        let Some(mut child) = self.child.take() else {
+        let Some(child) = self.child.as_mut() else {
             return Ok(());
         };
         match child.try_wait() {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => {
-                request_graceful_shutdown(&mut child)?;
-                Ok(())
-            }
-            Err(error) => Err(format!("Could not inspect receiver: {error}")),
-        }
+            Ok(Some(_)) => self.child = None,
+            Ok(None) => stop_child_retaining_handle(&mut self.child, request_graceful_shutdown)?,
+            Err(error) => return Err(format!("Could not inspect receiver: {error}")),
+        };
+        Ok(())
     }
 
     fn send_clipboard(&mut self) -> Result<(), String> {
@@ -220,11 +221,25 @@ impl ReceiverSupervisor for ReceiverProcess {
     }
 }
 
+fn stop_child_retaining_handle(
+    child: &mut Option<Child>,
+    stop: impl FnOnce(&mut Child) -> Result<(), String>,
+) -> Result<(), String> {
+    if let Some(process) = child.as_mut() {
+        stop(process)?;
+    }
+    *child = None;
+    Ok(())
+}
+
 fn request_graceful_shutdown(child: &mut Child) -> Result<(), String> {
     #[cfg(unix)]
     {
         let status = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
         if status == -1 {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return Ok(());
+            }
             return Err(format!(
                 "Could not request receiver shutdown: {}",
                 io::Error::last_os_error()
@@ -1536,6 +1551,25 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn receiver_handle_is_retained_when_shutdown_fails_and_cleared_after_retry() {
+        let mut child = Some(
+            std::process::Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .unwrap(),
+        );
+        let result = super::stop_child_retaining_handle(&mut child, |_| Err("stop failed".into()));
+        assert!(result.is_err());
+        assert!(child.as_mut().unwrap().try_wait().unwrap().is_none());
+        super::stop_child_retaining_handle(&mut child, |process| {
+            process.kill().map_err(|e| e.to_string())?;
+            process.wait().map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(child.is_none());
+    }
     use super::*;
 
     #[test]
