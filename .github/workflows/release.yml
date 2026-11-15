@@ -144,6 +144,7 @@ jobs:
           - The macOS and Steam Deck apps must be from this same release.
           - macOS requires Accessibility permission after installation.
           - The macOS app is ad-hoc signed in this release; notarized distribution is planned for a later release.
+          - If macOS blocks the first launch, open Privacy & Security, choose **Open Anyway**, and confirm **Open**. To open the page directly, run \`open "x-apple.systempreferences:com.apple.preference.security?Privacy"\` in Terminal.
           - Steam Deck installation and non-root \`/dev/uinput\` setup instructions are included in the archive.
           EOF
           if [[ "$REPLACE_EXISTING" == true ]]; then
