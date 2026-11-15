@@ -293,11 +293,13 @@ final class SettingsWindowControllerTests: XCTestCase {
         window.close()
     }
 
-    func testDockVisibilityPreferenceDefaultsToShownAndPersistsChoice() {
+    func testDockVisibilityPreferenceDefaultsToHiddenAndPersistsChoice() {
         let suite = "MacDeckMenuBarUITests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
 
+        XCTAssertFalse(DockVisibilityPreference.load(from: defaults))
+        DockVisibilityPreference.save(showInDock: true, to: defaults)
         XCTAssertTrue(DockVisibilityPreference.load(from: defaults))
         DockVisibilityPreference.save(showInDock: false, to: defaults)
         XCTAssertFalse(DockVisibilityPreference.load(from: defaults))
