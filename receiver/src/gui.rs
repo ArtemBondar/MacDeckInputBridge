@@ -473,7 +473,6 @@ enum FocusTarget {
     SyncLayout,
     SyncClipboard,
     SyncClipboardToMac,
-    SendClipboardToMac,
     LayoutMappings,
     CheckLayoutSync,
     RefreshSettingsAddresses,
@@ -487,11 +486,10 @@ enum FocusDirection {
 }
 
 impl FocusTarget {
-    const CONTROL_ORDER: [Self; 5] = [
+    const CONTROL_ORDER: [Self; 4] = [
         Self::ControlTab,
         Self::SettingsTab,
         Self::ToggleReceiver,
-        Self::SendClipboardToMac,
         Self::RefreshControlAddresses,
     ];
     const SETTINGS_ORDER: [Self; 14] = [
@@ -801,13 +799,6 @@ impl<P: ReceiverSupervisor> ReceiverApp<P> {
             }
             ui.add_space(12.0);
             ui.label("When disabled, the receiver stops and releases all injected keys.");
-            ui.add_space(16.0);
-            let response =
-                ui.add_sized([260.0, 48.0], egui::Button::new("Send Deck clipboard now"));
-            track_focus(focus_widgets, FocusTarget::SendClipboardToMac, &response);
-            if response.clicked() {
-                self.send_clipboard_from_ui();
-            }
             ui.add_space(20.0);
             ui.separator();
             ui.add_space(12.0);
@@ -2067,7 +2058,6 @@ mod tests {
                 FocusTarget::ControlTab,
                 FocusTarget::SettingsTab,
                 FocusTarget::ToggleReceiver,
-                FocusTarget::SendClipboardToMac,
                 FocusTarget::RefreshControlAddresses,
             ]
         );
@@ -2178,7 +2168,7 @@ mod tests {
                 Tab::Control,
                 false,
             ),
-            Some(FocusTarget::SendClipboardToMac)
+            Some(FocusTarget::RefreshControlAddresses)
         );
         assert_eq!(
             next_focus_target(None, FocusDirection::Next, Tab::Settings, false),

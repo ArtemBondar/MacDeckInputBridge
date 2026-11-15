@@ -112,9 +112,7 @@ public final class InMemoryPairingSecretStore: PairingSecretStoring {
     public func deleteSecret() throws { secret = nil }
 }
 
-/// An explicitly opt-in fallback for a Keychain the user has denied or that is
-/// unavailable. The secret is never written to UserDefaults: this store uses an
-/// owner-only file in Application Support instead.
+/// A private owner-only file in Application Support, outside UserDefaults.
 public final class LocalPairingSecretStore: PairingSecretStoring {
     private let fileURL: URL
     private let fileManager: FileManager
@@ -188,6 +186,7 @@ public final class LocalPairingSecretStore: PairingSecretStoring {
 
 public final class BridgeSettingsStore {
     private enum Key {
+        static let useKeychain = "useKeychainForPairingSecret"
         static let host = "deckHost"
         static let port = "deckPort"
         static let syncClipboardFromMac = "syncClipboardFromMac"
@@ -225,6 +224,40 @@ public final class BridgeSettingsStore {
         defaults.set(Int(validated.port), forKey: Key.port)
         defaults.set(validated.syncClipboardFromMac, forKey: Key.syncClipboardFromMac)
         defaults.set(validated.syncClipboardFromDeck, forKey: Key.syncClipboardFromDeck)
+    }
+
+    /// Existing installations retain their previous backend. A legacy fallback file
+    /// takes precedence without contacting Keychain; new installations use a file.
+    public var usesKeychainForPairingSecret: Bool {
+        if defaults.object(forKey: Key.useKeychain) != nil {
+            return defaults.bool(forKey: Key.useKeychain)
+        }
+        if defaults.bool(forKey: Key.allowLocalSecretFallback),
+           (try? localSecretStore.readSecret()) != nil { return false }
+        return defaults.object(forKey: Key.host) != nil
+    }
+
+    public func loadSelectedPairingSecret() throws -> String? {
+        if usesKeychainForPairingSecret { return try secretStore.readSecret() }
+        return try localSecretStore.readSecret()
+    }
+
+    /// Persist the new value before changing the selected backend so a failed
+    /// write never discards the previously selected secret.
+    @discardableResult
+    public func saveSelectedPairingSecret(_ secret: String, useKeychain: Bool) throws -> PairingSecretPersistence {
+        guard (try? PairingSecret(base64: secret)) != nil else { throw BridgeSettingsError.invalidPairingSecret }
+        if useKeychain {
+            try secretStore.saveSecret(secret)
+            defaults.set(true, forKey: Key.useKeychain)
+            try? localSecretStore.deleteSecret()
+            return .keychain
+        }
+        try localSecretStore.saveSecret(secret)
+        defaults.set(false, forKey: Key.useKeychain)
+        // Do not touch Keychain here: accessing it can prompt. A legacy item may
+        // remain until the user removes it in Keychain Access.
+        return .localPrivateFile
     }
 
     public var allowsLocalSecretFallback: Bool {

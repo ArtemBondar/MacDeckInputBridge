@@ -83,10 +83,11 @@ If the `uinput` group already exists, skip only the `groupadd` command.
 4. On the Mac, choose **Send keyboard to Steam Deck** or press
    Control–Shift–F12. Press it again to return the keyboard to the Mac.
 
-The Mac stores the pairing secret in the macOS Keychain, not in app preferences
-or logs. macOS may ask for your account password when the app saves or updates
-that secret. The prompt authorizes access to your user Keychain so other users
-and ordinary preference files cannot read it.
+By default, the Mac stores the pairing secret in an owner-only local file,
+outside app preferences and logs. In Settings, you can choose Keychain for
+stronger protection; macOS may ask you to authorize access. An older Keychain
+item may remain if you switch to local storage; remove it in Keychain Access
+if you no longer need it.
 
 ## Keyboard layouts
 
@@ -127,11 +128,8 @@ clipboard from Steam Deck** on Mac. Save both settings and reconnect.
 Clipboard sync requires an active Steam Deck Desktop Mode Wayland session. It
 does not run in Gaming Mode. It sends no existing clipboard when a connection
 starts, no non-text formats, and no clipboard contents are logged or saved.
-Use **Send Mac clipboard now** in the Mac menu bar to explicitly share the
-current value—for example, when REMOTE mode would otherwise forward Command-C
-to the Deck. Use **Send Deck clipboard now** on the Deck Control page to share
-its current value. Clipboard text may contain sensitive information. Recent
-changes are coalesced if they arrive faster than the connection can process them.
+Clipboard text may contain sensitive information. Recent changes are coalesced
+if they arrive faster than the connection can process them.
 
 ## Uninstall from Steam Deck
 

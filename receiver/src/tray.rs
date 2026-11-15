@@ -9,6 +9,7 @@ pub enum Action {
     Show,
     Settings,
     Toggle,
+    #[allow(dead_code)] // Retain the manual-send action for future use.
     SendClipboard,
     Quit,
     Offline,
@@ -83,13 +84,6 @@ impl ksni::Tray for Tray {
                 }
                 .into(),
                 activate: Box::new(|tray: &mut Self| tray.send(Action::Toggle)),
-                ..Default::default()
-            }
-            .into(),
-            StandardItem {
-                label: "Send Deck clipboard now".into(),
-                enabled: self.running && self.clipboard_enabled,
-                activate: Box::new(|tray: &mut Self| tray.send(Action::SendClipboard)),
                 ..Default::default()
             }
             .into(),
@@ -218,10 +212,6 @@ mod tests {
             panic!("toggle missing")
         };
         assert_eq!(toggle.label, "Enable Mac input");
-        let ksni::MenuItem::Standard(send) = &menu[3] else {
-            panic!("clipboard action missing")
-        };
-        assert!(!send.enabled);
         (toggle.activate)(&mut tray);
         assert_eq!(actions.try_recv(), Ok(Action::Toggle));
 
@@ -234,13 +224,7 @@ mod tests {
         let ksni::MenuItem::Standard(toggle) = &menu[2] else {
             panic!("toggle missing")
         };
-        let ksni::MenuItem::Standard(send) = &menu[3] else {
-            panic!("clipboard action missing")
-        };
         assert_eq!(toggle.label, "Disable Mac input");
-        assert!(send.enabled);
         assert_eq!(tray.tool_tip().description, "Mac input is enabled");
-        (send.activate)(&mut tray);
-        assert_eq!(actions.try_recv(), Ok(Action::SendClipboard));
     }
 }

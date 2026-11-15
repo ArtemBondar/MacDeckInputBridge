@@ -6,7 +6,7 @@ public struct SettingsDraft: Equatable {
     public var pairingSecret: String
     public var showInDock: Bool
     public var iconStyle: MenuBarIconStyle
-    public var allowLocalSecretFallback: Bool
+    public var useKeychainForPairingSecret: Bool
     public var syncClipboardFromMac: Bool
     public var syncClipboardFromDeck: Bool
     public var currentInputSourceID: String?
@@ -17,7 +17,7 @@ public struct SettingsDraft: Equatable {
         pairingSecret: String,
         showInDock: Bool = true,
         iconStyle: MenuBarIconStyle = .logo,
-        allowLocalSecretFallback: Bool = false,
+        useKeychainForPairingSecret: Bool = false,
         syncClipboardFromMac: Bool = false,
         syncClipboardFromDeck: Bool = false,
         currentInputSourceID: String? = nil
@@ -27,7 +27,7 @@ public struct SettingsDraft: Equatable {
         self.pairingSecret = pairingSecret
         self.showInDock = showInDock
         self.iconStyle = iconStyle
-        self.allowLocalSecretFallback = allowLocalSecretFallback
+        self.useKeychainForPairingSecret = useKeychainForPairingSecret
         self.syncClipboardFromMac = syncClipboardFromMac
         self.syncClipboardFromDeck = syncClipboardFromDeck
         self.currentInputSourceID = currentInputSourceID
@@ -46,8 +46,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     public let showInDockCheckbox = NSButton(checkboxWithTitle: "Show MacDeckInputBridge in Dock", target: nil, action: nil)
     public let iconStylePopup = NSPopUpButton()
     public let iconPreviews = [NSImageView(), NSImageView(), NSImageView()]
-    public let allowLocalSecretFallbackCheckbox = NSButton(
-        checkboxWithTitle: "If Keychain is unavailable, store the secret in a private local file",
+    public let useKeychainForPairingSecretCheckbox = NSButton(
+        checkboxWithTitle: "Store pairing secret in macOS Keychain",
         target: nil,
         action: nil
     )
@@ -101,7 +101,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         showInDockCheckbox.state = draft.showInDock ? .on : .off
         iconStylePopup.selectItem(at: MenuBarIconStyle.allCases.firstIndex(of: draft.iconStyle) ?? 0)
         updateIconPreviews(nil)
-        allowLocalSecretFallbackCheckbox.state = draft.allowLocalSecretFallback ? .on : .off
+        useKeychainForPairingSecretCheckbox.state = draft.useKeychainForPairingSecret ? .on : .off
         syncClipboardCheckbox.state = draft.syncClipboardFromMac ? .on : .off
         syncClipboardFromDeckCheckbox.state = draft.syncClipboardFromDeck ? .on : .off
         currentInputSourceLabel.stringValue = draft.currentInputSourceID ?? "Unavailable"
@@ -180,7 +180,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             pairingSecret: pairingSecretField.stringValue,
             showInDock: showInDockCheckbox.state == .on,
             iconStyle: selectedIconStyle,
-            allowLocalSecretFallback: allowLocalSecretFallbackCheckbox.state == .on,
+            useKeychainForPairingSecret: useKeychainForPairingSecretCheckbox.state == .on,
             syncClipboardFromMac: syncClipboardCheckbox.state == .on,
             syncClipboardFromDeck: syncClipboardFromDeckCheckbox.state == .on
         )
@@ -192,8 +192,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         DockVisibilityPreference.apply(showInDock: draft.showInDock)
     }
 
-    @objc private func localSecretFallbackSelectionChanged(_ sender: Any?) {
-        guard allowLocalSecretFallbackCheckbox.state == .on,
+    @objc private func secretStorageSelectionChanged(_ sender: Any?) {
+        guard useKeychainForPairingSecretCheckbox.state == .off,
               isKeychainRelatedNotice(messageLabel.stringValue) else { return }
         messageLabel.stringValue = "After you click Save, the pairing secret will be stored in this Mac’s private local file."
         messageLabel.textColor = .secondaryLabelColor
@@ -234,7 +234,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
         let deckTitle = label("Steam Deck", font: .systemFont(ofSize: 20, weight: .semibold))
         let pairingTitle = label("Pairing", font: .systemFont(ofSize: 20, weight: .semibold))
-        let guidance = NSTextField(wrappingLabelWithString: "Stored in this Mac’s Keychain. If Keychain access is denied, the optional local fallback is owner-only but less secure. Typed keys are never stored or logged.")
+        let guidance = NSTextField(wrappingLabelWithString: "By default, the secret is stored in a private local file accessible to your account. Keychain offers stronger protection and may request permission. Typed keys are never stored or logged.")
         guidance.textColor = .secondaryLabelColor
         guidance.font = .systemFont(ofSize: 12)
         let clipboardGuidance = NSTextField(wrappingLabelWithString: "Clipboard sharing is off by default. New text may contain sensitive information; it is encrypted and is not logged or saved by MacDeck.")
@@ -265,8 +265,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         saveButton.target = self
         saveButton.action = #selector(save(_:))
         saveButton.keyEquivalent = "\r"
-        allowLocalSecretFallbackCheckbox.target = self
-        allowLocalSecretFallbackCheckbox.action = #selector(localSecretFallbackSelectionChanged(_:))
+        useKeychainForPairingSecretCheckbox.target = self
+        useKeychainForPairingSecretCheckbox.action = #selector(secretStorageSelectionChanged(_:))
         iconStylePopup.addItems(withTitles: MenuBarIconStyle.allCases.map(\.title))
         iconStylePopup.target = self
         iconStylePopup.action = #selector(updateIconPreviews(_:))
@@ -290,7 +290,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             pairingTitle,
             fieldRow("Pairing secret", pairingSecretField),
             guidance,
-            allowLocalSecretFallbackCheckbox,
+            useKeychainForPairingSecretCheckbox,
             syncClipboardCheckbox,
             syncClipboardFromDeckCheckbox,
             clipboardGuidance,

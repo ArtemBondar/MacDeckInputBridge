@@ -334,6 +334,41 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(try store.loadPairingSecret(), secret)
     }
 
+    func testSelectedSecretDefaultsToPrivateFileWithoutAccessingKeychain() throws {
+        let suite = "MacDeckInputBridgeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let local = InMemoryPairingSecretStore()
+        let store = BridgeSettingsStore(defaults: defaults, secretStore: KeychainDeniedStore(), localSecretStore: local)
+        let secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        XCTAssertFalse(store.usesKeychainForPairingSecret)
+        XCTAssertEqual(try store.saveSelectedPairingSecret(secret, useKeychain: false), .localPrivateFile)
+        XCTAssertEqual(try store.loadSelectedPairingSecret(), secret)
+        XCTAssertThrowsError(try store.saveSelectedPairingSecret(secret, useKeychain: true))
+        XCTAssertFalse(store.usesKeychainForPairingSecret)
+        XCTAssertEqual(try store.loadSelectedPairingSecret(), secret)
+    }
+
+    func testExistingKeychainAndFallbackInstallationsRetainTheirStorage() throws {
+        let suite = "MacDeckInputBridgeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("deck.local", forKey: "deckHost")
+        let keychain = InMemoryPairingSecretStore()
+        let local = InMemoryPairingSecretStore()
+        let secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        try keychain.saveSecret(secret)
+        let store = BridgeSettingsStore(defaults: defaults, secretStore: keychain, localSecretStore: local)
+        XCTAssertTrue(store.usesKeychainForPairingSecret)
+        XCTAssertEqual(try store.loadSelectedPairingSecret(), secret)
+        defaults.set(true, forKey: "allowLocalSecretFallback")
+        try local.saveSecret(secret)
+        XCTAssertFalse(store.usesKeychainForPairingSecret)
+        XCTAssertEqual(try store.loadSelectedPairingSecret(), secret)
+        XCTAssertEqual(try store.saveSelectedPairingSecret(secret, useKeychain: true), .keychain)
+        XCTAssertNil(try local.readSecret())
+    }
+
     func testSettingsValidationRejectsEmptyHostAndInvalidSecret() {
         XCTAssertThrowsError(try BridgeSettings(host: "", port: 4242).validated()) { error in
             XCTAssertEqual(error as? BridgeSettingsError, .missingHost)
