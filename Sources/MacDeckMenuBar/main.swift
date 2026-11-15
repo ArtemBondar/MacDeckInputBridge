@@ -332,7 +332,7 @@ private struct MenuContentView: View {
             Text(message)
         }
         Divider()
-        Button("About MacDeckInputBridge…") {
+        Button("About MacDeck…") {
             let credits = NSMutableAttributedString(string: "Developed by Artem Bondar\n")
             credits.append(NSAttributedString(
                 string: "github.com/ArtemBondar",
