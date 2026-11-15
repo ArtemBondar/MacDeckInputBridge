@@ -29,6 +29,47 @@ const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(200);
 // Once a frame starts, do not let a stalled or trickling peer hold keys forever.
 const SESSION_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PENDING_HANDSHAKES: usize = 4;
+// Bound shutdown latency when no clients connect; readiness wakes immediately.
+const LISTENER_POLL_MILLIS: libc::c_int = 200;
+
+fn wait_for_listener(listener: &impl AsRawFd) -> io::Result<()> {
+    let mut fd = libc::pollfd {
+        fd: listener.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let result = unsafe { libc::poll(&mut fd, 1, LISTENER_POLL_MILLIS) };
+    if result < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    } else if fd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+        return Err(io::Error::other("listener readiness failed"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod listener_readiness_tests {
+    use super::*;
+
+    #[test]
+    fn listener_wait_handles_idle_and_readiness() {
+        use std::os::unix::net::UnixStream;
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        reader.set_nonblocking(true).unwrap();
+        wait_for_listener(&reader).unwrap();
+        let mut byte = [0u8; 1];
+        assert_eq!(
+            (&reader).read(&mut byte).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        writer.write_all(&[1]).unwrap();
+        wait_for_listener(&reader).unwrap();
+        assert_eq!((&reader).read(&mut byte).unwrap(), 1);
+    }
+}
 
 #[derive(Parser)]
 #[command(about = "Encrypted Mac keyboard receiver for SteamOS Desktop Mode")]
@@ -1537,9 +1578,7 @@ fn serve(
                 }));
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                // Keep shutdown responsive without spinning the CPU fifty
-                // times per second while the receiver is idle.
-                thread::sleep(Duration::from_millis(200));
+                wait_for_listener(&listener)?;
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error),
