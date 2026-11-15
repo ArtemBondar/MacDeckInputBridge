@@ -344,7 +344,7 @@ private struct MenuContentView: View {
         Button("Settings…") {
             model.showSettings()
         }
-        Button("Quit MacDeckInputBridge") {
+        Button("Quit MacDeck") {
             model.stop()
             NSApplication.shared.terminate(nil)
         }
