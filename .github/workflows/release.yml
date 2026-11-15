@@ -141,6 +141,19 @@ jobs:
           cat > notes.md <<EOF
           ## MacDeckInputBridge $VERSION
 
+          ### What's new
+
+          - Share text clipboard contents in both directions, with controls and delivery feedback.
+          - Improved keyboard layout synchronization, standard layout matching and manual mapping.
+          - Steam Deck UI improvements for smaller windows, scrolling and controller navigation.
+          - Added a Desktop Mode tray with input-state icons, window controls and an optional hidden taskbar entry.
+          - Choose between two macOS menu bar icon styles, with connection states and animated previews. The Dock icon is hidden by default on new installations.
+          - Optionally store the pairing secret in a private local file if Keychain access is unavailable.
+          - Improved connection recovery, receiver shutdown handling and clipboard monitoring.
+          - Added Steam library artwork, installation guidance and the MacDeck website.
+
+          ### Installation and compatibility
+
           - The macOS and Steam Deck apps must be from this same release.
           - macOS requires Accessibility permission after installation.
           - The macOS app is ad-hoc signed in this release; notarized distribution is planned for a later release.
