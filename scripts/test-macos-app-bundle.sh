@@ -2,7 +2,7 @@
 set -eu
 
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-sh "$project_root/scripts/build-macos-app.sh"
+MAC_DECK_APP_VERSION=12.34.56 MAC_DECK_BUILD_NUMBER=789 sh "$project_root/scripts/build-macos-app.sh"
 plist="$project_root/.build/MacDeckInputBridge.app/Contents/Info.plist"
 value=$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$plist")
 if [ "$value" != true ]; then
@@ -16,4 +16,6 @@ for key in CFBundleName CFBundleDisplayName; do
     exit 1
   fi
 done
-echo "macOS app bundle startup policy and name test passed."
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" = 12.34.56
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" = 789
+echo "macOS app bundle startup policy, name and version test passed."
