@@ -43,7 +43,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     public let hostField = NSTextField(string: "")
     public let portField = NSTextField(string: "")
     public let pairingSecretField = NSSecureTextField(string: "")
-    public let showInDockCheckbox = NSButton(checkboxWithTitle: "Show MacDeckInputBridge in Dock", target: nil, action: nil)
+    public let showInDockCheckbox = NSButton(checkboxWithTitle: "Show MacDeck in Dock", target: nil, action: nil)
     public let iconStylePopup = NSPopUpButton()
     public let iconPreviews = [NSImageView(), NSImageView(), NSImageView()]
     public let useKeychainForPairingSecretCheckbox = NSButton(
@@ -77,7 +77,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             backing: .buffered,
             defer: false
         )
-        window.title = "MacDeckInputBridge Settings"
+        window.title = "MacDeck Settings"
         window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false
         super.init(window: window)
