@@ -61,9 +61,15 @@ If the `uinput` group already exists, skip only the `groupadd` command.
 1. Download and unzip `MacDeckInputBridge-macos.zip` from the same release.
 2. Move `MacDeckInputBridge.app` to **Applications** and open it.
 3. The current release is not notarized. On the first launch, choose **Done**
-   in the warning, then open **System Settings → Privacy & Security → Open
-   Anyway** and confirm **Open**. Only do this for a file downloaded from this
-   repository's release page.
+   in the warning. Open **System Settings → Privacy & Security**, scroll to
+   **Open Anyway**, and confirm **Open**. Only do this for a file downloaded
+   from this repository's release page.
+
+   To open Privacy & Security directly, run in Terminal:
+
+   ```sh
+   open "x-apple.systempreferences:com.apple.preference.security?Privacy"
+   ```
 4. When macOS asks, allow **MacDeckInputBridge** in **Privacy & Security →
    Accessibility**. This is required to read and forward physical key events.
 
