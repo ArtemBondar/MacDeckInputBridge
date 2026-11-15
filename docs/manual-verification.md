@@ -37,3 +37,8 @@ Perform this checklist on a MacBook and Steam Deck OLED in Desktop Mode before e
 - Disable each direction, disconnect and reconnect, and verify that old clipboard values are not replayed and normal keyboard input continues.
 - Exercise simultaneous changes, unsupported formats, oversized text and a missing compositor capability. Verify errors do not include clipboard text or secrets.
 - Test Gaming Mode separately and record the actual result; Desktop Mode results do not establish Gaming Mode support.
+
+# Child-process polling verification
+
+- On a stock Deck, enable and disable Mac input repeatedly and verify shutdown completes, input is released, and no receiver processes remain after disabling. Check normal layout sync and its diagnostics as above.
+- Compare idle and repeated layout-switch/stop activity on the installed app with a system process monitor. Record CPU/power observations, SteamOS version, and Desktop/Gaming Mode separately; no battery impact is established by automated tests.
