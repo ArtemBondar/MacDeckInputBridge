@@ -248,10 +248,10 @@ final class SettingsWindowControllerTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         drainMainQueue()
 
-        XCTAssertEqual(controller.allowLocalSecretFallbackCheckbox.state, .off)
-        controller.allowLocalSecretFallbackCheckbox.state = .on
+        XCTAssertEqual(controller.useKeychainForPairingSecretCheckbox.state, .off)
+        controller.useKeychainForPairingSecretCheckbox.state = .on
         controller.saveButton.performClick(nil)
-        XCTAssertEqual(saved?.allowLocalSecretFallback, true)
+        XCTAssertEqual(saved?.useKeychainForPairingSecret, true)
         window.close()
     }
 
@@ -283,7 +283,8 @@ final class SettingsWindowControllerTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         drainMainQueue()
 
-        controller.allowLocalSecretFallbackCheckbox.performClick(nil)
+        controller.useKeychainForPairingSecretCheckbox.state = .on
+        controller.useKeychainForPairingSecretCheckbox.performClick(nil)
 
         XCTAssertEqual(
             controller.messageLabel.stringValue,
