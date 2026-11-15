@@ -1510,10 +1510,10 @@ mod uinput {
     }
 }
 
-fn serve(
+fn serve<S: KeySink + Send + 'static>(
     listener: TcpListener,
     pairing_secret: PairingSecret,
-    sink: uinput::UinputSink,
+    sink: S,
     shutdown: Arc<AtomicBool>,
     sync_layout_from_mac: bool,
     layout_mappings: Vec<String>,
@@ -1545,6 +1545,9 @@ fn serve(
     while !shutdown.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((mut stream, _)) => {
+                // Some platforms inherit O_NONBLOCK from the listener. Worker
+                // reads use socket timeouts and require a blocking stream.
+                stream.set_nonblocking(false)?;
                 let accepted = reserve_handshake_slot(&pending_handshakes);
                 if !accepted {
                     let _ = stream.shutdown(Shutdown::Both);
@@ -2487,5 +2490,212 @@ mod receiver_tests {
             PLASMA_KEYBOARD_LAYOUT_METHOD,
             "org.kde.KeyboardLayouts.setLayout"
         );
+    }
+}
+
+// Exercise the production accept loop with real loopback sockets and a fake
+// keyboard, without requiring /dev/uinput or a graphical session.
+#[cfg(test)]
+mod receiver_socket_tests {
+    use super::*;
+    use std::{collections::BTreeSet, sync::mpsc};
+
+    struct RecordingSink {
+        held: Arc<Mutex<BTreeSet<u16>>>,
+        events: mpsc::Sender<()>,
+    }
+
+    impl KeySink for RecordingSink {
+        fn emit(&mut self, code: u16, value: i32) -> io::Result<()> {
+            let mut held = self.held.lock().unwrap();
+            if value == 0 {
+                held.remove(&code);
+            } else {
+                held.insert(code);
+            }
+            let _ = self.events.send(());
+            Ok(())
+        }
+
+        fn release_all(&mut self) -> io::Result<()> {
+            self.held.lock().unwrap().clear();
+            let _ = self.events.send(());
+            Ok(())
+        }
+    }
+
+    struct TestServer {
+        address: std::net::SocketAddr,
+        shutdown: Arc<AtomicBool>,
+        worker: Option<thread::JoinHandle<io::Result<()>>>,
+    }
+
+    impl TestServer {
+        fn start(pairing: PairingSecret, sink: RecordingSink) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let server_shutdown = Arc::clone(&shutdown);
+            let worker = thread::spawn(move || {
+                serve(
+                    listener,
+                    pairing,
+                    sink,
+                    server_shutdown,
+                    false,
+                    Vec::new(),
+                    ((false, false), Arc::new(AtomicBool::new(false))),
+                )
+            });
+            Self {
+                address,
+                shutdown,
+                worker: Some(worker),
+            }
+        }
+
+        fn connect(&self) -> TcpStream {
+            let stream = TcpStream::connect(self.address).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            stream
+        }
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            self.shutdown.store(true, Ordering::Release);
+            if let Some(worker) = self.worker.take() {
+                worker.join().unwrap().unwrap();
+            }
+        }
+    }
+
+    fn test_pairing() -> PairingSecret {
+        PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap()
+    }
+
+    fn test_sink() -> (RecordingSink, Arc<Mutex<BTreeSet<u16>>>, mpsc::Receiver<()>) {
+        let held = Arc::new(Mutex::new(BTreeSet::new()));
+        let (events, receiver) = mpsc::channel();
+        (
+            RecordingSink {
+                held: Arc::clone(&held),
+                events,
+            },
+            held,
+            receiver,
+        )
+    }
+
+    #[test]
+    fn saturated_handshakes_reject_extra_client_and_reuse_interrupted_slot() {
+        let pairing = test_pairing();
+        let (sink, _, _) = test_sink();
+        let server = TestServer::start(pairing.clone(), sink);
+        let mut pending = Vec::new();
+        for _ in 0..MAX_PENDING_HANDSHAKES {
+            let mut client = server.connect();
+            mac_deck_receiver::read_server_hello(&mut client).unwrap();
+            pending.push(client);
+        }
+        let mut rejected = server.connect();
+        assert!(mac_deck_receiver::read_server_hello(&mut rejected).is_err());
+
+        // Interrupt one real handshake. Retry while its worker releases the
+        // slot; no arbitrary fixed wait is used to assume worker scheduling.
+        drop(pending.pop());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let mut client = server.connect();
+            if let Ok(challenge) = mac_deck_receiver::read_server_hello(&mut client) {
+                let session = SessionFramer::new(derive_session_secret(&pairing, &challenge));
+                session
+                    .write_packet(&mut client, 0, &Packet::ClientReady)
+                    .unwrap();
+                assert_eq!(
+                    session.read_packet(&mut client).unwrap(),
+                    (0, Packet::ServerReady)
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "interrupted handshake slot was not reused"
+            );
+            thread::yield_now();
+        }
+        drop(pending);
+    }
+
+    #[test]
+    fn production_handshake_deadline_expires_despite_trickled_bytes() {
+        let pairing = test_pairing();
+        let (sink, _, _) = test_sink();
+        let server = TestServer::start(pairing.clone(), sink);
+        let mut client = server.connect();
+        client
+            .set_read_timeout(Some(HANDSHAKE_TIMEOUT + Duration::from_secs(3)))
+            .unwrap();
+        mac_deck_receiver::read_server_hello(&mut client).unwrap();
+        client.write_all(&4096u32.to_be_bytes()).unwrap();
+        let mut writer = client.try_clone().unwrap();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            while stop_rx.recv_timeout(Duration::from_millis(50)).is_err() {
+                if writer.write_all(&[0]).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut byte = [0];
+        let result = client.read(&mut byte);
+        let _ = stop_tx.send(());
+        worker.join().unwrap();
+        assert!(
+            matches!(result, Ok(0))
+                || matches!(result, Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset)
+        );
+
+        let mut replacement = server.connect();
+        let challenge = mac_deck_receiver::read_server_hello(&mut replacement).unwrap();
+        let session = SessionFramer::new(derive_session_secret(&pairing, &challenge));
+        session
+            .write_packet(&mut replacement, 0, &Packet::ClientReady)
+            .unwrap();
+        assert_eq!(
+            session.read_packet(&mut replacement).unwrap(),
+            (0, Packet::ServerReady)
+        );
+    }
+
+    #[test]
+    fn shutdown_releases_held_keys_in_production_worker() {
+        let pairing = test_pairing();
+        let (sink, held, events) = test_sink();
+        let server = TestServer::start(pairing.clone(), sink);
+        let mut client = server.connect();
+        let challenge = mac_deck_receiver::read_server_hello(&mut client).unwrap();
+        let session = SessionFramer::new(derive_session_secret(&pairing, &challenge));
+        session
+            .write_packet(&mut client, 0, &Packet::ClientReady)
+            .unwrap();
+        assert_eq!(
+            session.read_packet(&mut client).unwrap(),
+            (0, Packet::ServerReady)
+        );
+        session
+            .write_packet(&mut client, 1, &Packet::Key { code: 30, value: 1 })
+            .unwrap();
+        events.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(held.lock().unwrap().contains(&30));
+
+        server.shutdown.store(true, Ordering::Release);
+        drop(server);
+        assert!(held.lock().unwrap().is_empty());
     }
 }
