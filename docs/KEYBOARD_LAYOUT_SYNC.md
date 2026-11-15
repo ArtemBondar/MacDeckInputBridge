@@ -5,15 +5,20 @@ Plasma to select a compatible layout before the next forwarded key is handled.
 
 When enabled, MacDeck sends the active Mac input-source ID immediately when the
 encrypted session becomes ready and whenever macOS reports a source change. The
-receiver applies an exact manual override first. Otherwise it compares the ID's
-name with the XKB code and description of layouts configured in Plasma.
+receiver applies an exact manual override first. Otherwise it compares standard
+Apple layout IDs with the XKB code and full
+description of layouts configured in Plasma. When available, the standard XKB
+rules description also helps match layouts when Plasma names are localized.
+It does not infer a match from individual words.
 
 Automatic switching happens only for one unambiguous match. If a source is
 unknown or more than one Deck layout could match, MacDeck leaves the Deck's
 layout unchanged and still forwards physical keys. This prevents a wrong layout
 from being selected silently.
 
-For a custom or ambiguous source, copy **Current Mac layout ID** from the Mac
+Some standard names and variants cannot be matched reliably across platforms.
+Use a manual mapping when automatic matching does not find a clear match, or
+for a custom or ambiguous source. Copy **Current Mac layout ID** from the Mac
 menu-bar app's Settings window and map it to the zero-based order shown in
 **Plasma Settings → Keyboard → Layouts**:
 
@@ -21,9 +26,9 @@ menu-bar app's Settings window and map it to the zero-based order shown in
 com.apple.keylayout.Ukrainian = 1
 ```
 
+The mapping refers to a position, so update it if you reorder layouts in Plasma.
 There is no cross-platform identifier shared by all macOS input methods and
-XKB layouts, so a manual override remains necessary for an ambiguous custom
-layout. Typed text is not inspected, sent, or stored for matching.
+XKB layouts. Typed text is not inspected, sent, or stored for matching.
 
 ## Deck diagnostics
 
@@ -64,4 +69,5 @@ its configured layout list and XKB descriptions under
 `MAC_DECK_XKB_RULES_DIR` to the absolute path of the directory containing
 `base.lst` or `evdev.lst` in the receiver's environment. Unreadable or empty
 files fall back to the standard directory; missing descriptions fall back to
-layout codes. Runtime Plasma data always takes precedence.
+layout codes. Runtime Plasma layout order and variant take precedence; XKB descriptions are
+also consulted for canonical layout names.
