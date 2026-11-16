@@ -9,3 +9,5 @@
 @media(max-width:740px){.wrap{width:calc(100% - 36px)}.header{flex-wrap:wrap}.header nav{gap:14px;flex-wrap:wrap}.hero{grid-template-columns:1fr;gap:35px;padding-block:55px 75px}.intro,.privacy{grid-template-columns:1fr;gap:15px;padding-block:50px}.features{grid-template-columns:1fr;padding-bottom:50px}.setup{padding-block:50px}.setup-grid{grid-template-columns:1fr;gap:30px}.end{align-items:start;flex-direction:column;padding-block:50px}.footer{flex-wrap:wrap}.footer p{min-width:60%}}
 @media(max-width:360px){.hero-art{padding:18px}.switch-line{gap:10px}.device-name{font-size:20px}.keys{gap:4px}.keys kbd{min-width:58px;padding:6px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+
+.setup-illustration{display:block;width:100%;max-width:440px;height:auto;color:var(--ink)}.device-labels{display:flex;justify-content:space-between;gap:12px;margin:8px 4% 0;color:var(--muted);font:700 11px/1.4 ui-monospace,SFMono-Regular,monospace;letter-spacing:.04em}.switch-scene{width:100%}.shortcut-label{margin-top:24px}
