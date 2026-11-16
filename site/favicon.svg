@@ -1,58 +1,36 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 140 512 220">
-  <style>svg{color:#26332e}@media(prefers-color-scheme:dark){svg{color:#edf3e9}}</style>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="15 150 482 210" width="512" height="512">
+  <title>MacDeck</title><style>svg{color:#26332e}@media(prefers-color-scheme:dark){svg{color:#edf3e9}}</style>
 
-  <!-- Outer Chassis Frame -->
+  <!-- Main Chassis + Even-Odd Cutouts (Screen Border, Glare, D-Pad, Sticks, Trackpads, ABXY) -->
   <path
-    fill="none"
-    stroke="currentColor"
-    stroke-width="21"
-    d="
-      M 42 154.5
-      L 470 154.5
-      C 492 154.5, 501.5 163, 501.5 186
-      L 501.5 310
-      C 495 330, 476 355, 446 355
-      L 66 349.5
-      C 36 349.5, 17 330, 14.5 296
-      L 10.5 186
-      C 10.5 163, 20 154.5, 42 154.5
-      Z
-    "
-  />
-
-  <!-- Center Screen Bezel (Rounded Outer, Sharp Inner Cutout) -->
-  <path
-    fill="currentColor"
+    fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"
     fill-rule="evenodd"
     d="
-      M 147 174 H 365 A 14 14 0 0 1 379 188 V 312 A 14 14 0 0 1 365 326 H 147 A 14 14 0 0 1 133 312 V 188 A 14 14 0 0 1 147 174 Z
-      M 153 193.5 H 359 V 306.5 H 153 Z
+      M 26 200 C 26 176 36 164 60 164 L 452 164 C 476 164 486 176 486 200 L 484 292 C 482 326 466 348 436 348 L 76 348 C 46 348 30 326 28 292 Z
+
+      M 159.1 187.15 H 352.9 A 10.2 10.2 0 0 1 363.1 197.35 V 314.65 A 10.2 10.2 0 0 1 352.9 324.85 H 159.1 A 10.2 10.2 0 0 1 148.9 314.65 V 197.35 A 10.2 10.2 0 0 1 159.1 187.15 Z
+
+    "/>
+  <path fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round" transform="translate(12 18.4)" d="
+      M 49.5 175 A 2 2 0 0 1 51.5 173 L 60.5 173 A 2 2 0 0 1 62.5 175 L 62.5 185.5 L 73 185.5 A 2 2 0 0 1 75 187.5 L 75 196.5 A 2 2 0 0 1 73 198.5 L 62.5 198.5 L 62.5 209 A 2 2 0 0 1 60.5 211 L 51.5 211 A 2 2 0 0 1 49.5 209 L 49.5 198.5 L 39 198.5 A 2 2 0 0 1 37 196.5 L 37 187.5 A 2 2 0 0 1 39 185.5 L 49.5 185.5 Z
+
+      M 85.5 199 A 12.5 12.5 0 1 0 110.5 199 A 12.5 12.5 0 1 0 85.5 199 Z
+      M 68 227 H 102 A 8 8 0 0 1 110 235 V 271 A 8 8 0 0 1 102 279 H 68 A 8 8 0 0 1 60 271 V 235 A 8 8 0 0 1 68 227 Z
+
+    "/>
+  <path fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round" transform="translate(-12 18.4)" d="
+      M 401.5 199 A 12.5 12.5 0 1 0 426.5 199 A 12.5 12.5 0 1 0 401.5 199 Z
+      M 410 227 H 444 A 8 8 0 0 1 452 235 V 271 A 8 8 0 0 1 444 279 H 410 A 8 8 0 0 1 402 271 V 235 A 8 8 0 0 1 410 227 Z
+
+      M 449 178 A 7 7 0 1 0 463 178 A 7 7 0 1 0 449 178 Z
+      M 449 206 A 7 7 0 1 0 463 206 A 7 7 0 1 0 449 206 Z
+      M 435 192 A 7 7 0 1 0 449 192 A 7 7 0 1 0 435 192 Z
+      M 463 192 A 7 7 0 1 0 477 192 A 7 7 0 1 0 463 192 Z
     "
   />
 
-  <!-- Left D-Pad -->
-  <path
-    fill="currentColor"
-    d="
-      M 47.5 174 H 64.5 V 191 H 81.5 V 208 H 64.5 V 225 H 47.5 V 208 H 30.5 V 191 H 47.5 Z
-    "
-  />
-
-  <!-- Left Thumbstick -->
-  <circle cx="107" cy="199.5" r="15.5" fill="currentColor" />
-
-  <!-- Left Trackpad -->
-  <rect x="66.4" y="229.9" width="61.2" height="61.2" rx="10" fill="currentColor" />
-
-  <!-- Right Thumbstick -->
-  <circle cx="405" cy="199.5" r="15.5" fill="currentColor" />
-
-  <!-- Right Trackpad -->
-  <rect x="384.4" y="229.9" width="61.2" height="61.2" rx="10" fill="currentColor" />
-
-  <!-- Right ABXY Buttons -->
-  <circle cx="456" cy="183" r="9" fill="currentColor" />
-  <circle cx="456" cy="216" r="9" fill="currentColor" />
-  <circle cx="439.5" cy="199.5" r="9" fill="currentColor" />
-  <circle cx="472.5" cy="199.5" r="9" fill="currentColor" />
 </svg>
+
+
+
+
