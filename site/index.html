@@ -35,63 +35,87 @@
               <rect x="283" y="10" width="112" height="70" rx="4" fill="var(--bg)"/>
               <path d="M339 80v13m-24 0h48"/><circle cx="350" cy="39" r="8"/><circle cx="324" cy="53" r="4"/><path d="M328 51l15-9"/>
             </g>
-            <svg x="266" y="98" width="146" height="56" viewBox="0 145 512 215">
-  <title>Steam Deck Outline Icon</title>
+            <svg x="266" y="98" width="146" height="56" viewBox="0 150 512 210">
+  <title>Steam Deck Icon</title>
 
-  <!-- Outer Chassis Frame -->
-  <path
-    fill="none"
-    stroke="currentColor"
-    stroke-width="21"
-    d="
-      M 42 154.5
-      L 470 154.5
-      C 492 154.5, 501.5 163, 501.5 186
-      C 501.5 230, 500 272, 497.5 296
-      C 495 330, 476 349.5, 446 349.5
-      L 66 349.5
-      C 36 349.5, 17 330, 14.5 296
-      C 12 272, 10.5 230, 10.5 186
-      C 10.5 163, 20 154.5, 42 154.5
-      Z
-    "
-  />
-
-  <!-- Center Screen Bezel (Rounded Outer, Sharp Inner Cutout) -->
+  <!-- Main Chassis + Even-Odd Cutouts (Screen Border, Glare, D-Pad, Sticks, Trackpads, ABXY) -->
   <path
     fill="currentColor"
     fill-rule="evenodd"
     d="
-      M 147 174 H 365 A 14 14 0 0 1 379 188 V 312 A 14 14 0 0 1 365 326 H 147 A 14 14 0 0 1 133 312 V 188 A 14 14 0 0 1 147 174 Z
-      M 153 193.5 H 359 V 306.5 H 153 Z
+      M 26 200
+      C 26 176, 36 164, 60 164
+      L 452 164
+      C 476 164, 486 176, 486 200
+      L 486.5 225.5
+      L 471 225.5
+      A 9.5 9.5 0 0 0 461.5 235
+      L 461.5 274
+      Q 461.5 276, 460 278.5
+      L 418.5 348
+      L 93.5 348
+      L 52 278.5
+      Q 50.5 276, 50.5 274
+      L 50.5 235
+      A 9.5 9.5 0 0 0 41 225.5
+      L 25.5 225.5
+      Z
+
+      M 142 175 H 370 A 12 12 0 0 1 382 187 V 325 A 12 12 0 0 1 370 337 H 142 A 12 12 0 0 1 130 325 V 187 A 12 12 0 0 1 142 175 Z
+      M 142.5 179.5 H 369.5 A 8 8 0 0 1 377.5 187.5 V 324.5 A 8 8 0 0 1 369.5 332.5 H 142.5 A 8 8 0 0 1 134.5 324.5 V 187.5 A 8 8 0 0 1 142.5 179.5 Z
+
+      M 144 184 L 166 184 L 140 210 L 140 188 A 4 4 0 0 1 144 184 Z
+      M 175 184 L 184 184 L 140 228 L 140 219 Z
+      M 194 184 L 254 184 L 140 298 L 140 238 Z
+      M 265 184 L 275 184 L 140 319 L 140 309 Z
+
+      M 49.5 175 A 2 2 0 0 1 51.5 173 L 60.5 173 A 2 2 0 0 1 62.5 175 L 62.5 185.5 L 73 185.5 A 2 2 0 0 1 75 187.5 L 75 196.5 A 2 2 0 0 1 73 198.5 L 62.5 198.5 L 62.5 209 A 2 2 0 0 1 60.5 211 L 51.5 211 A 2 2 0 0 1 49.5 209 L 49.5 198.5 L 39 198.5 A 2 2 0 0 1 37 196.5 L 37 187.5 A 2 2 0 0 1 39 185.5 L 49.5 185.5 Z
+
+      M 85.5 199 A 12.5 12.5 0 1 0 110.5 199 A 12.5 12.5 0 1 0 85.5 199 Z
+      M 68 227 H 102 A 8 8 0 0 1 110 235 V 271 A 8 8 0 0 1 102 279 H 68 A 8 8 0 0 1 60 271 V 235 A 8 8 0 0 1 68 227 Z
+
+      M 401.5 199 A 12.5 12.5 0 1 0 426.5 199 A 12.5 12.5 0 1 0 401.5 199 Z
+      M 410 227 H 444 A 8 8 0 0 1 452 235 V 271 A 8 8 0 0 1 444 279 H 410 A 8 8 0 0 1 402 271 V 235 A 8 8 0 0 1 410 227 Z
+
+      M 449 178 A 7 7 0 1 0 463 178 A 7 7 0 1 0 449 178 Z
+      M 449 206 A 7 7 0 1 0 463 206 A 7 7 0 1 0 449 206 Z
+      M 435 192 A 7 7 0 1 0 449 192 A 7 7 0 1 0 435 192 Z
+      M 463 192 A 7 7 0 1 0 477 192 A 7 7 0 1 0 463 192 Z
     "
   />
 
-  <!-- Left D-Pad -->
+  <!-- Left Grip Flap -->
   <path
     fill="currentColor"
     d="
-      M 47.5 174 H 64.5 V 191 H 81.5 V 208 H 64.5 V 225 H 47.5 V 208 H 30.5 V 191 H 47.5 Z
+      M 25.5 228.5
+      L 41 228.5
+      A 6.5 6.5 0 0 1 47.5 235
+      L 47.5 275.5
+      Q 47.5 277.5, 49 280
+      L 90 348
+      L 76 348
+      C 46 348, 30 326, 28 292
+      C 26.5 266, 25.8 244, 25.5 228.5
+      Z
     "
   />
 
-  <!-- Left Thumbstick -->
-  <circle cx="107" cy="199.5" r="15.5" fill="currentColor" />
-
-  <!-- Left Trackpad -->
-  <rect x="71.5" y="235" width="51" height="51" rx="10" fill="currentColor" />
-
-  <!-- Right Thumbstick -->
-  <circle cx="405" cy="199.5" r="15.5" fill="currentColor" />
-
-  <!-- Right Trackpad -->
-  <rect x="389.5" y="235" width="51" height="51" rx="10" fill="currentColor" />
-
-  <!-- Right ABXY Buttons -->
-  <circle cx="456" cy="183" r="9" fill="currentColor" />
-  <circle cx="456" cy="216" r="9" fill="currentColor" />
-  <circle cx="439.5" cy="199.5" r="9" fill="currentColor" />
-  <circle cx="472.5" cy="199.5" r="9" fill="currentColor" />
+  <!-- Right Grip Flap -->
+  <path
+    fill="currentColor"
+    d="
+      M 486.5 228.5
+      C 486.2 244, 485.5 266, 484 292
+      C 482 326, 466 348, 436 348
+      L 422 348
+      L 463 280
+      Q 464.5 277.5, 464.5 275.5
+      L 464.5 235
+      A 6.5 6.5 0 0 1 471 228.5
+      Z
+    "
+  />
 </svg>
           </svg>
           <div class="device-labels" aria-hidden="true"><span>YOUR MAC</span><span>DOCKED STEAM DECK</span></div>
