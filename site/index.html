@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#f4f3ef">
   <title>MacDeck — one keyboard, two devices</title>
   <link rel="icon" href="icon.png">
-  <link rel="stylesheet" href="style.css?v=brand-2">
+  <link rel="stylesheet" href="style.css?v=setup-4">
   <script>try{const t=localStorage.getItem('theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
 <body>
@@ -26,7 +26,21 @@
       <div class="hero-art" role="img" aria-label="Switch your Mac keyboard to Steam Deck with Control, Shift and F12">
         
         <div class="switch-scene" aria-hidden="true">
-          <div class="switch-line"><span class="device-name">Mac</span><span class="switch-arrow">→</span><span class="device-name destination"><svg viewBox="0 0 18 18" width="42" height="42" class="deck-mark"><path d="M6.7 1.2a7.8 7.8 0 0 1 0 15.6v-3.2a4.6 4.6 0 0 0 0-9.2z" fill="currentColor"/><circle cx="6.7" cy="9" r="3.2" fill="#1a9fff"/></svg>Steam Deck</span></div>
+          <svg class="setup-illustration" viewBox="0 0 440 160" aria-hidden="true">
+            <g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="22" y="18" width="148" height="88" rx="8" fill="var(--bg)"/>
+              <path d="M13 110h166l-8 9H21z" fill="var(--soft)"/>
+              <path d="M54 42h40M54 53h76M54 64h56" stroke="var(--muted)" stroke-width="2"/>
+              <path d="M190 72h58m-9-8 9 8-9 8" stroke="var(--muted)"/>
+              <rect x="283" y="10" width="112" height="70" rx="4" fill="var(--bg)"/>
+              <path d="M339 80v13m-24 0h48"/>
+              <rect x="275" y="106" width="128" height="38" rx="15" fill="var(--soft)"/>
+              <rect x="302" y="113" width="74" height="24" rx="3" fill="var(--bg)"/>
+            </g>
+            <g fill="currentColor"><circle cx="289" cy="125" r="3"/><circle cx="389" cy="125" r="3"/></g>
+            <path d="M306 147h66" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+          <div class="device-labels" aria-hidden="true"><span>YOUR MAC</span><span>DOCKED STEAM DECK</span></div>
           <div class="shortcut-label">SWITCH KEYBOARD</div>
           <div class="keys"><kbd>⌃ <small>control</small></kbd><span class="key-plus">+</span><kbd>⇧ <small>shift</small></kbd><span class="key-plus">+</span><kbd>F12</kbd></div>
         </div>
