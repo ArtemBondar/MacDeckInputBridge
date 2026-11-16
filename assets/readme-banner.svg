@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
+<title id="title">MacDeck: one keyboard, two devices</title><desc id="desc">Use your Mac keyboard with a docked Steam Deck.</desc>
+<rect width="1200" height="300" rx="20" fill="#18221e"/>
+<text x="60" y="95" fill="#edf3e9" font-family="Arial,sans-serif" font-weight="700" font-size="42">MacDeck</text>
+<text x="60" y="155" fill="#edf3e9" font-family="Arial,sans-serif" font-weight="700" font-size="32">Dock your Deck. Keep your keyboard.</text>
+<text x="60" y="205" fill="#adbdaf" font-family="Arial,sans-serif" font-size="21">One keyboard. Your Mac and Steam Deck.</text>
+<g fill="none" stroke="#edf3e9" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"><rect x="810" y="90" width="115" height="73" rx="5"/><path d="M800 169h135l-8 9H808z"/><path d="M955 130h57m-9-9 9 9-9 9" stroke="#adbdaf"/><rect x="1030" y="100" width="120" height="64" rx="24"/><rect x="1060" y="114" width="60" height="36" rx="3"/></g><g fill="#edf3e9"><circle cx="1045" cy="132" r="5"/><circle cx="1135" cy="132" r="5"/></g></svg>
