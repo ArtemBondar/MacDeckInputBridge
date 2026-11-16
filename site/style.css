@@ -20,4 +20,3 @@
 
 .intro{grid-template-columns:1fr;gap:12px}.intro .eyebrow{margin:0}.intro div>p{margin-bottom:0}.device-labels{display:grid;grid-template-columns:44% 46%;justify-content:space-between;text-align:center;margin-inline:0}
 
-.brand-app-icon{width:32px;height:32px;object-fit:contain;filter:grayscale(1);border-radius:7px}
