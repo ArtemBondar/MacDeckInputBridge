@@ -10,7 +10,7 @@
 @media(max-width:360px){.hero-art{padding:18px}.switch-line{gap:10px}.device-name{font-size:20px}.keys{gap:4px}.keys kbd{min-width:58px;padding:6px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 
-.setup-illustration{display:block;width:100%;max-width:440px;height:auto;color:var(--ink)}.device-labels{display:flex;justify-content:space-between;gap:12px;margin:8px 4% 0;color:var(--muted);font:700 11px/1.4 ui-monospace,SFMono-Regular,monospace;letter-spacing:.04em}.switch-scene{width:100%}.shortcut-label{margin-top:24px}
+.setup-illustration{display:block;width:100%;max-width:440px;height:auto;margin-inline:auto;color:var(--ink)}.device-labels{display:flex;justify-content:space-between;gap:12px;margin:8px 4% 0;color:var(--muted);font:700 11px/1.4 ui-monospace,SFMono-Regular,monospace;letter-spacing:.04em}.switch-scene{width:100%}.shortcut-label{margin-top:24px}
 
 /* Keep the reading areas compact and comfortable on wide screens. */
 .hero{padding-block:68px 72px}.intro,.privacy{padding-block:52px}.features{padding-bottom:52px}.setup{padding-block:52px}.setup-grid{grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);gap:48px}.setup li{padding:16px 0}.end{padding-block:52px}
