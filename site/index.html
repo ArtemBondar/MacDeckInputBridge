@@ -7,12 +7,42 @@
   <meta name="theme-color" content="#f4f3ef">
   <title>MacDeck — one keyboard, two devices</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="style.css?v=outline-7">
+  <link rel="stylesheet" href="style.css?v=outline-8">
   <script>try{const t=localStorage.getItem('theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
 <body>
   <header class="header wrap">
-    <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span><span>MacDeck</span></a>
+    <a class="brand" href="#top"><svg class="brand-mark" viewBox="15 150 482 210" aria-hidden="true">
+  
+
+  <!-- Main Chassis + Even-Odd Cutouts (Screen Border, Glare, D-Pad, Sticks, Trackpads, ABXY) -->
+  <path
+    fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"
+    fill-rule="evenodd"
+    d="
+      M 26 200 C 26 176 36 164 60 164 L 452 164 C 476 164 486 176 486 200 L 484 292 C 482 326 466 348 436 348 L 76 348 C 46 348 30 326 28 292 Z
+
+      M 142 175 H 370 A 12 12 0 0 1 382 187 V 325 A 12 12 0 0 1 370 337 H 142 A 12 12 0 0 1 130 325 V 187 A 12 12 0 0 1 142 175 Z
+
+      M 49.5 175 A 2 2 0 0 1 51.5 173 L 60.5 173 A 2 2 0 0 1 62.5 175 L 62.5 185.5 L 73 185.5 A 2 2 0 0 1 75 187.5 L 75 196.5 A 2 2 0 0 1 73 198.5 L 62.5 198.5 L 62.5 209 A 2 2 0 0 1 60.5 211 L 51.5 211 A 2 2 0 0 1 49.5 209 L 49.5 198.5 L 39 198.5 A 2 2 0 0 1 37 196.5 L 37 187.5 A 2 2 0 0 1 39 185.5 L 49.5 185.5 Z
+
+      M 85.5 199 A 12.5 12.5 0 1 0 110.5 199 A 12.5 12.5 0 1 0 85.5 199 Z
+      M 68 227 H 102 A 8 8 0 0 1 110 235 V 271 A 8 8 0 0 1 102 279 H 68 A 8 8 0 0 1 60 271 V 235 A 8 8 0 0 1 68 227 Z
+
+      M 401.5 199 A 12.5 12.5 0 1 0 426.5 199 A 12.5 12.5 0 1 0 401.5 199 Z
+      M 410 227 H 444 A 8 8 0 0 1 452 235 V 271 A 8 8 0 0 1 444 279 H 410 A 8 8 0 0 1 402 271 V 235 A 8 8 0 0 1 410 227 Z
+
+      M 449 178 A 7 7 0 1 0 463 178 A 7 7 0 1 0 449 178 Z
+      M 449 206 A 7 7 0 1 0 463 206 A 7 7 0 1 0 449 206 Z
+      M 435 192 A 7 7 0 1 0 449 192 A 7 7 0 1 0 435 192 Z
+      M 463 192 A 7 7 0 1 0 477 192 A 7 7 0 1 0 463 192 Z
+    "
+  />
+
+</svg>
+
+
+<span>MacDeck</span></a>
     <nav aria-label="Main navigation"><a href="#how-it-works">How it works</a><a href="#setup">Setup</a><a href="https://github.com/ArtemBondar/MacDeckInputBridge">GitHub ↗</a><button class="theme-toggle" type="button" aria-label="Change color theme">Theme: System</button></nav>
   </header>
   <main id="top">
@@ -29,7 +59,7 @@
           <svg class="setup-illustration" viewBox="0 0 440 165" aria-hidden="true">
             <text x="164.5" y="52" text-anchor="middle" fill="currentColor" font-family="system-ui, sans-serif" font-size="10" font-weight="700">TCP</text>
             <g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-              <g transform="translate(0 16) scale(.7)"><path fill="currentColor" stroke="none" fill-rule="evenodd" d="M31 18h130a6 6 0 0 1 6 6v83H25V24a6 6 0 0 1 6-6zm0 3a3 3 0 0 0-3 3v80h136V24a3 3 0 0 0-3-3h-52v4h-26v-4z"/>
+              <g transform="translate(0 16) scale(.7)"><rect x="28" y="21" width="136" height="83" rx="3" fill="var(--bg)" stroke="none"/><path fill="currentColor" stroke="none" fill-rule="evenodd" d="M31 18h130a6 6 0 0 1 6 6v83H25V24a6 6 0 0 1 6-6zm0 3a3 3 0 0 0-3 3v80h136V24a3 3 0 0 0-3-3h-52v4h-26v-4z"/>
               <path d="M14 110h68v2h28v-2h68v4q0 5-7 5H21q-7 0-7-5z" fill="currentColor" stroke="none"/>
               
               
@@ -156,7 +186,37 @@
     <section class="privacy wrap"><p class="eyebrow">A NOTE ON PRIVACY <span> / 03</span></p><div><h2>Kept between<br>your devices.</h2><p>The connection is authenticated and encrypted. Typed text and clipboard contents are not logged or stored. Use MacDeck on a trusted network and keep your pairing secret private.</p><a class="text-link" href="https://github.com/ArtemBondar/MacDeckInputBridge#privacy-and-limits">Privacy &amp; limitations <span aria-hidden="true">↗</span></a></div></section>
     <section class="end wrap"><div><p class="eyebrow">READY WHEN YOU ARE</p><h2>Dock it. Connect it.<br><em>Get typing.</em></h2></div><a class="button primary" href="https://github.com/ArtemBondar/MacDeckInputBridge/releases/latest">Download the apps <span aria-hidden="true">↗</span></a></section>
   </main>
-  <footer class="wrap footer"><a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span><span>MacDeck</span></a><p>Built for the space between Mac and Steam Deck.</p><a href="https://github.com/ArtemBondar/MacDeckInputBridge">View on GitHub ↗</a></footer>
+  <footer class="wrap footer"><a class="brand" href="#top"><svg class="brand-mark" viewBox="15 150 482 210" aria-hidden="true">
+  
+
+  <!-- Main Chassis + Even-Odd Cutouts (Screen Border, Glare, D-Pad, Sticks, Trackpads, ABXY) -->
+  <path
+    fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"
+    fill-rule="evenodd"
+    d="
+      M 26 200 C 26 176 36 164 60 164 L 452 164 C 476 164 486 176 486 200 L 484 292 C 482 326 466 348 436 348 L 76 348 C 46 348 30 326 28 292 Z
+
+      M 142 175 H 370 A 12 12 0 0 1 382 187 V 325 A 12 12 0 0 1 370 337 H 142 A 12 12 0 0 1 130 325 V 187 A 12 12 0 0 1 142 175 Z
+
+      M 49.5 175 A 2 2 0 0 1 51.5 173 L 60.5 173 A 2 2 0 0 1 62.5 175 L 62.5 185.5 L 73 185.5 A 2 2 0 0 1 75 187.5 L 75 196.5 A 2 2 0 0 1 73 198.5 L 62.5 198.5 L 62.5 209 A 2 2 0 0 1 60.5 211 L 51.5 211 A 2 2 0 0 1 49.5 209 L 49.5 198.5 L 39 198.5 A 2 2 0 0 1 37 196.5 L 37 187.5 A 2 2 0 0 1 39 185.5 L 49.5 185.5 Z
+
+      M 85.5 199 A 12.5 12.5 0 1 0 110.5 199 A 12.5 12.5 0 1 0 85.5 199 Z
+      M 68 227 H 102 A 8 8 0 0 1 110 235 V 271 A 8 8 0 0 1 102 279 H 68 A 8 8 0 0 1 60 271 V 235 A 8 8 0 0 1 68 227 Z
+
+      M 401.5 199 A 12.5 12.5 0 1 0 426.5 199 A 12.5 12.5 0 1 0 401.5 199 Z
+      M 410 227 H 444 A 8 8 0 0 1 452 235 V 271 A 8 8 0 0 1 444 279 H 410 A 8 8 0 0 1 402 271 V 235 A 8 8 0 0 1 410 227 Z
+
+      M 449 178 A 7 7 0 1 0 463 178 A 7 7 0 1 0 449 178 Z
+      M 449 206 A 7 7 0 1 0 463 206 A 7 7 0 1 0 449 206 Z
+      M 435 192 A 7 7 0 1 0 449 192 A 7 7 0 1 0 435 192 Z
+      M 463 192 A 7 7 0 1 0 477 192 A 7 7 0 1 0 463 192 Z
+    "
+  />
+
+</svg>
+
+
+<span>MacDeck</span></a><p>Built for the space between Mac and Steam Deck.</p><a href="https://github.com/ArtemBondar/MacDeckInputBridge">View on GitHub ↗</a></footer>
 <script>(()=>{const b=document.querySelector('.theme-toggle');function update(){let t=document.documentElement.dataset.theme;b.textContent='Theme: '+(t?t[0].toUpperCase()+t.slice(1):'System');b.setAttribute('aria-label','Color theme: '+(t||'system')+'. Change theme')}b.addEventListener('click',()=>{let t=document.documentElement.dataset.theme;let n=!t?'dark':t==='dark'?'light':null;if(n)document.documentElement.dataset.theme=n;else delete document.documentElement.dataset.theme;try{if(n)localStorage.setItem('theme',n);else localStorage.removeItem('theme')}catch(e){}update()});update()})();</script>
 </body>
 </html>
