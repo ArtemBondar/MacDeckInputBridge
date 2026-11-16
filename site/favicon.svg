@@ -10,11 +10,11 @@
       M 42 154.5
       L 470 154.5
       C 492 154.5, 501.5 163, 501.5 186
-      C 501.5 230, 500 272, 497.5 296
+      L 501.5 310
       C 495 330, 476 355, 446 355
       L 66 349.5
       C 36 349.5, 17 330, 14.5 296
-      C 12 272, 10.5 230, 10.5 186
+      L 10.5 186
       C 10.5 163, 20 154.5, 42 154.5
       Z
     "
@@ -42,13 +42,13 @@
   <circle cx="107" cy="199.5" r="15.5" fill="currentColor" />
 
   <!-- Left Trackpad -->
-  <rect x="71.5" y="235" width="51" height="51" rx="10" fill="currentColor" />
+  <rect x="66.4" y="229.9" width="61.2" height="61.2" rx="10" fill="currentColor" />
 
   <!-- Right Thumbstick -->
   <circle cx="405" cy="199.5" r="15.5" fill="currentColor" />
 
   <!-- Right Trackpad -->
-  <rect x="389.5" y="235" width="51" height="51" rx="10" fill="currentColor" />
+  <rect x="384.4" y="229.9" width="61.2" height="61.2" rx="10" fill="currentColor" />
 
   <!-- Right ABXY Buttons -->
   <circle cx="456" cy="183" r="9" fill="currentColor" />
