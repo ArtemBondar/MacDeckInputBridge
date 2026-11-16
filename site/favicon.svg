@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36">
+  <style>svg{color:#26332e}@media(prefers-color-scheme:dark){svg{color:#edf3e9}}</style>
+  <rect x="1.5" y="9.5" width="33" height="17" rx="7" fill="none" stroke="currentColor" stroke-width="2"/>
+  <rect x="10" y="13.5" width="16" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <circle cx="6.5" cy="18" r="1.5" fill="currentColor"/>
+  <circle cx="29.5" cy="18" r="1.5" fill="currentColor"/>
+</svg>
