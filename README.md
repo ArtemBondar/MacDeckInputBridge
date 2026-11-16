@@ -1,4 +1,5 @@
-# MacDeckInputBridge
+# MacDeck
+   Encrypted Mac keyboard input for Steam Deck Desktop Mode.
 
 [Project website](https://macdeck.artembondar.dev/) · [Download](https://github.com/ArtemBondar/MacDeckInputBridge/releases/latest)
 
