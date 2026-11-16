@@ -21,6 +21,10 @@ class ScopeTests(unittest.TestCase):
             ([b"Sources/BridgeCore/Protocol.swift"], (True, True)),
             ([b".github/workflows/release.yml"], (True, True)),
             ([b"new/path"], (True, True)),
+            ([b"site/index.html", b"site/style.css"], (False, False)),
+            ([b"site/index.html", b"Sources/MacDeckMenuBar/main.swift"], (True, False)),
+            ([b"site/index.html", b"receiver/src/gui.rs"], (False, True)),
+            ([b"site/index.html", b".github/workflows/pages.yml"], (True, True)),
             ([], (True, True)),
             ([b"Sources/MacDeckMenuBar/main.swift", b"receiver/src/gui.rs"], (True, True)),
         ]

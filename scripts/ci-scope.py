@@ -7,7 +7,11 @@ import sys
 
 def classify(paths):
     swift = receiver = False
+    if not paths:
+        return True, True
     for path in paths:
+        if path.startswith(b"site/"):
+            continue
         # The protocol implementation and its tests are cross-platform.
         if path.startswith((b"Sources/BridgeCore/", b"Tests/BridgeCoreTests/")):
             return True, True
@@ -22,7 +26,7 @@ def classify(paths):
             receiver = True
         else:
             return True, True
-    return (swift, receiver) if swift or receiver else (True, True)
+    return swift, receiver
 
 
 def main():
