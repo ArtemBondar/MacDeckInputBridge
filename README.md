@@ -1,10 +1,8 @@
 # MacDeckInputBridge
 
-[Project website](https://artembondar.github.io/MacDeckInputBridge/) · [Download](https://github.com/ArtemBondar/MacDeckInputBridge/releases/latest)
+[Project website](https://macdeck.artembondar.dev/) · [Download](https://github.com/ArtemBondar/MacDeckInputBridge/releases/latest)
 
-<p align="center">
-  <img src="assets/MacDeckInputBridgeIcon.png" width="256" height="256" alt="MacDeckInputBridge">
-</p>
+![MacDeck: one keyboard for your Mac and Steam Deck](assets/readme-banner.svg)
 
 Send a Mac keyboard to a Steam Deck in Desktop Mode over your local network.
 MacDeck captures physical key events on the Mac and creates a virtual keyboard
