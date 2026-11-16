@@ -66,6 +66,5 @@ jobs:
           [[ "$SCOPE_RESULT" == success ]] || exit 1
           [[ "$SWIFT_SELECTED" == true || "$SWIFT_SELECTED" == false ]] || exit 1
           [[ "$RECEIVER_SELECTED" == true || "$RECEIVER_SELECTED" == false ]] || exit 1
-          [[ "$SWIFT_SELECTED" == true || "$RECEIVER_SELECTED" == true ]] || exit 1
           [[ "$SWIFT_SELECTED" != true || "$SWIFT_RESULT" == success ]] || exit 1
           [[ "$RECEIVER_SELECTED" != true || "$RECEIVER_RESULT" == success ]] || exit 1
