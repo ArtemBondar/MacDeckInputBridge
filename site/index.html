@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#f4f3ef">
   <title>MacDeck — one keyboard, two devices</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="style.css?v=setup-5">
+  <link rel="stylesheet" href="style.css?v=setup-6">
   <script>try{const t=localStorage.getItem('theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
 <body>
@@ -30,15 +30,69 @@
             <g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
               <rect x="22" y="18" width="148" height="88" rx="8" fill="var(--bg)"/>
               <path d="M13 110h166l-8 9H21z" fill="var(--soft)"/>
-              <path d="M54 42h40M54 53h76M54 64h56" stroke="var(--muted)" stroke-width="2"/>
+              <path d="M94 48c-4-5-11-3-11 4 0 6 4 13 8 13 2 0 3-1 5-1s3 1 5 1c4 0 7-6 8-9-5-2-5-8-1-10-4-4-9-2-12 0-1-3-2-5-2-8" fill="currentColor" stroke="none"/>
               <path d="M190 72h58m-9-8 9 8-9 8" stroke="var(--muted)"/>
               <rect x="283" y="10" width="112" height="70" rx="4" fill="var(--bg)"/>
-              <path d="M339 80v13m-24 0h48"/>
-              <rect x="275" y="106" width="128" height="38" rx="15" fill="var(--soft)"/>
-              <rect x="302" y="113" width="74" height="24" rx="3" fill="var(--bg)"/>
+              <path d="M339 80v13m-24 0h48"/><circle cx="350" cy="39" r="8"/><circle cx="324" cy="53" r="4"/><path d="M328 51l15-9"/>
             </g>
-            <g fill="currentColor"><circle cx="289" cy="125" r="3"/><circle cx="389" cy="125" r="3"/></g>
-            <path d="M306 147h66" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+            <svg x="266" y="98" width="146" height="56" viewBox="0 145 512 215">
+  <title>Steam Deck Outline Icon</title>
+
+  <!-- Outer Chassis Frame -->
+  <path
+    fill="none"
+    stroke="currentColor"
+    stroke-width="21"
+    d="
+      M 42 154.5
+      L 470 154.5
+      C 492 154.5, 501.5 163, 501.5 186
+      C 501.5 230, 500 272, 497.5 296
+      C 495 330, 476 349.5, 446 349.5
+      L 66 349.5
+      C 36 349.5, 17 330, 14.5 296
+      C 12 272, 10.5 230, 10.5 186
+      C 10.5 163, 20 154.5, 42 154.5
+      Z
+    "
+  />
+
+  <!-- Center Screen Bezel (Rounded Outer, Sharp Inner Cutout) -->
+  <path
+    fill="currentColor"
+    fill-rule="evenodd"
+    d="
+      M 147 174 H 365 A 14 14 0 0 1 379 188 V 312 A 14 14 0 0 1 365 326 H 147 A 14 14 0 0 1 133 312 V 188 A 14 14 0 0 1 147 174 Z
+      M 153 193.5 H 359 V 306.5 H 153 Z
+    "
+  />
+
+  <!-- Left D-Pad -->
+  <path
+    fill="currentColor"
+    d="
+      M 47.5 174 H 64.5 V 191 H 81.5 V 208 H 64.5 V 225 H 47.5 V 208 H 30.5 V 191 H 47.5 Z
+    "
+  />
+
+  <!-- Left Thumbstick -->
+  <circle cx="107" cy="199.5" r="15.5" fill="currentColor" />
+
+  <!-- Left Trackpad -->
+  <rect x="71.5" y="235" width="51" height="51" rx="10" fill="currentColor" />
+
+  <!-- Right Thumbstick -->
+  <circle cx="405" cy="199.5" r="15.5" fill="currentColor" />
+
+  <!-- Right Trackpad -->
+  <rect x="389.5" y="235" width="51" height="51" rx="10" fill="currentColor" />
+
+  <!-- Right ABXY Buttons -->
+  <circle cx="456" cy="183" r="9" fill="currentColor" />
+  <circle cx="456" cy="216" r="9" fill="currentColor" />
+  <circle cx="439.5" cy="199.5" r="9" fill="currentColor" />
+  <circle cx="472.5" cy="199.5" r="9" fill="currentColor" />
+</svg>
           </svg>
           <div class="device-labels" aria-hidden="true"><span>YOUR MAC</span><span>DOCKED STEAM DECK</span></div>
           <div class="shortcut-label">SWITCH KEYBOARD</div>
