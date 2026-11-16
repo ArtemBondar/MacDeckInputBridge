@@ -1,7 +1,96 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
-<title id="title">MacDeck: one keyboard, two devices</title><desc id="desc">Use your Mac keyboard with a docked Steam Deck.</desc>
-<rect width="1200" height="300" rx="20" fill="#18221e"/>
-<text x="60" y="95" fill="#edf3e9" font-family="Arial,sans-serif" font-weight="700" font-size="42">MacDeck</text>
-<text x="60" y="155" fill="#edf3e9" font-family="Arial,sans-serif" font-weight="700" font-size="32">Dock your Deck. Keep your keyboard.</text>
-<text x="60" y="205" fill="#adbdaf" font-family="Arial,sans-serif" font-size="21">One keyboard. Your Mac and Steam Deck.</text>
-<g fill="none" stroke="#edf3e9" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"><rect x="810" y="90" width="115" height="73" rx="5"/><path d="M800 169h135l-8 9H808z"/><path d="M955 130h57m-9-9 9 9-9 9" stroke="#adbdaf"/><rect x="1030" y="100" width="120" height="64" rx="24"/><rect x="1060" y="114" width="60" height="36" rx="3"/></g><g fill="#edf3e9"><circle cx="1045" cy="132" r="5"/><circle cx="1135" cy="132" r="5"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360"><title>MacDeck: one keyboard, two devices</title><rect width="1200" height="360" rx="20" fill="#18221e"/><text x="60" y="112" fill="#edf3e9" font-family="Arial,sans-serif" font-weight="700" font-size="42">MacDeck</text><text x="60" y="166" fill="#edf3e9" font-family="Arial,sans-serif" font-weight="700" font-size="28">Dock your Deck.</text><text x="60" y="205" fill="#edf3e9" font-family="Arial,sans-serif" font-weight="700" font-size="28">Keep your keyboard.</text><text x="60" y="250" fill="#adbdaf" font-family="Arial,sans-serif" font-size="18">One keyboard. Two devices.</text><svg x="550" y="55" width="600" height="225" viewBox="0 0 440 165">
+            <text x="145" y="52" text-anchor="middle" fill="#edf3e9" font-family="system-ui, sans-serif" font-size="10" font-weight="700">TCP</text>
+            <g fill="none" stroke="#edf3e9" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <g transform="translate(0 16) scale(.7)"><rect x="28" y="21" width="136" height="83" rx="3" fill="#18221e" stroke="none"/><path fill="#edf3e9" stroke="none" fill-rule="evenodd" d="M31 18h130a6 6 0 0 1 6 6v83H25V24a6 6 0 0 1 6-6zm0 3a3 3 0 0 0-3 3v80h136V24a3 3 0 0 0-3-3h-52v4h-26v-4z"/>
+              <path d="M14 110h68v2h28v-2h68v4q0 5-7 5H21q-7 0-7-5z" fill="#edf3e9" stroke="none"/>
+              
+              
+              </g><path d="M121 66H169 M127 60l-6 6 6 6 M163 60l6 6-6 6" stroke="#adbdaf" stroke-width="1.5"/><g transform="translate(122.7 14.7) scale(.77)"><rect x="275" y="18" width="128" height="80" rx="4" fill="#18221e"/>
+              <path d="M339 98v12m-22 0h44"/></g><path d="M277 74 C302 105 340 110 357 93" stroke="#adbdaf" stroke-width="1.5"/>
+            </g>
+            <svg x="58" y="49" width="18" height="21" viewBox="0 0 440 500"><path fill="#a0a0a0" d="M39 18C96 8 174 11 217 78v23C164 125 92 122 39 18Z"/><path fill="#666666" d="M76 35C118 46 158 63 193 88 151 76 110 60 76 35Z"/><path fill="#555555" d="M206 142C206 82 226 34 258 4a13.5 13.5 0 0 1 20 18c-30 28-46 68-46 120Z"/><path fill="#777777" d="M219 137c35 0 57-13 89-13 78 0 130 50 130 134 0 98-72 240-170 240-20 0-35-5-47-13-13 8-29 14-50 14C72 499 2 356 2 256 2 170 56 122 128 122c37 0 57 15 91 15Z"/><path fill="none" stroke="#fff" stroke-width="20" stroke-linecap="round" d="M73 328c9 28 33 60 63 87"/></svg>
+            <svg x="374" y="51" width="21" height="21" viewBox="0 0 18 18"><path d="M6.7 1.2a7.8 7.8 0 0 1 0 15.6v-3.2a4.6 4.6 0 0 0 0-9.2z" fill="#edf3e9"/><circle cx="6.7" cy="9" r="3.2" fill="#888888"/></svg>
+            <svg x="173" y="42.5" width="104" height="48.4" viewBox="0 150 512 210">
+  <title>Steam Deck Icon</title>
+
+  <!-- Main Chassis + Even-Odd Cutouts (Screen Border, Glare, D-Pad, Sticks, Trackpads, ABXY) -->
+  <path
+    fill="#edf3e9"
+    fill-rule="evenodd"
+    d="
+      M 26 200
+      C 26 176, 36 164, 60 164
+      L 452 164
+      C 476 164, 486 176, 486 200
+      L 486.5 225.5
+      L 471 225.5
+      A 9.5 9.5 0 0 0 461.5 235
+      L 461.5 274
+      Q 461.5 276, 460 278.5
+      L 418.5 348
+      L 93.5 348
+      L 52 278.5
+      Q 50.5 276, 50.5 274
+      L 50.5 235
+      A 9.5 9.5 0 0 0 41 225.5
+      L 25.5 225.5
+      Z
+
+      M 142 175 H 370 A 12 12 0 0 1 382 187 V 325 A 12 12 0 0 1 370 337 H 142 A 12 12 0 0 1 130 325 V 187 A 12 12 0 0 1 142 175 Z
+      M 142.5 179.5 H 369.5 A 8 8 0 0 1 377.5 187.5 V 324.5 A 8 8 0 0 1 369.5 332.5 H 142.5 A 8 8 0 0 1 134.5 324.5 V 187.5 A 8 8 0 0 1 142.5 179.5 Z
+
+      M 144 184 L 166 184 L 140 210 L 140 188 A 4 4 0 0 1 144 184 Z
+      M 175 184 L 184 184 L 140 228 L 140 219 Z
+      M 194 184 L 254 184 L 140 298 L 140 238 Z
+      M 265 184 L 275 184 L 140 319 L 140 309 Z
+
+      M 49.5 175 A 2 2 0 0 1 51.5 173 L 60.5 173 A 2 2 0 0 1 62.5 175 L 62.5 185.5 L 73 185.5 A 2 2 0 0 1 75 187.5 L 75 196.5 A 2 2 0 0 1 73 198.5 L 62.5 198.5 L 62.5 209 A 2 2 0 0 1 60.5 211 L 51.5 211 A 2 2 0 0 1 49.5 209 L 49.5 198.5 L 39 198.5 A 2 2 0 0 1 37 196.5 L 37 187.5 A 2 2 0 0 1 39 185.5 L 49.5 185.5 Z
+
+      M 85.5 199 A 12.5 12.5 0 1 0 110.5 199 A 12.5 12.5 0 1 0 85.5 199 Z
+      M 68 227 H 102 A 8 8 0 0 1 110 235 V 271 A 8 8 0 0 1 102 279 H 68 A 8 8 0 0 1 60 271 V 235 A 8 8 0 0 1 68 227 Z
+
+      M 401.5 199 A 12.5 12.5 0 1 0 426.5 199 A 12.5 12.5 0 1 0 401.5 199 Z
+      M 410 227 H 444 A 8 8 0 0 1 452 235 V 271 A 8 8 0 0 1 444 279 H 410 A 8 8 0 0 1 402 271 V 235 A 8 8 0 0 1 410 227 Z
+
+      M 449 178 A 7 7 0 1 0 463 178 A 7 7 0 1 0 449 178 Z
+      M 449 206 A 7 7 0 1 0 463 206 A 7 7 0 1 0 449 206 Z
+      M 435 192 A 7 7 0 1 0 449 192 A 7 7 0 1 0 435 192 Z
+      M 463 192 A 7 7 0 1 0 477 192 A 7 7 0 1 0 463 192 Z
+    "
+  />
+
+  <!-- Left Grip Flap -->
+  <path
+    fill="#edf3e9"
+    d="
+      M 25.5 228.5
+      L 41 228.5
+      A 6.5 6.5 0 0 1 47.5 235
+      L 47.5 275.5
+      Q 47.5 277.5, 49 280
+      L 90 348
+      L 76 348
+      C 46 348, 30 326, 28 292
+      C 26.5 266, 25.8 244, 25.5 228.5
+      Z
+    "
+  />
+
+  <!-- Right Grip Flap -->
+  <path
+    fill="#edf3e9"
+    d="
+      M 486.5 228.5
+      C 486.2 244, 485.5 266, 484 292
+      C 482 326, 466 348, 436 348
+      L 422 348
+      L 463 280
+      Q 464.5 277.5, 464.5 275.5
+      L 464.5 235
+      A 6.5 6.5 0 0 1 471 228.5
+      Z
+    "
+  />
+</svg>
+            <g fill="#adbdaf" font-family="ui-monospace, monospace" font-size="10" font-weight="700" letter-spacing=".4"><text x="67" y="128" text-anchor="middle">YOUR MAC</text><text x="225" y="128" text-anchor="middle">STEAM DECK</text><text x="382" y="128" text-anchor="middle">DISPLAY</text></g>
+          </svg></svg>
