@@ -174,6 +174,22 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(try receiver.open(combined: frames[1]), .key(code: 30, value: 1))
     }
 
+    func testPointerPacketWireFixtures() {
+        let fixtures: [(BridgePacket, [UInt8])] = [
+            (.pointerMotion(dx: -32768, dy: 32767), [15, 128, 0, 127, 255]),
+            (.pointerScroll(horizontal: -1, vertical: 256), [17, 255, 255, 1, 0]),
+            (.pointerButton(button: 1, pressed: true), [16, 1, 1]),
+            (.pointerButton(button: 0, pressed: false), [16, 0, 0])
+        ]
+        for (packet, bytes) in fixtures {
+            XCTAssertEqual(packet.encoded(), Data(bytes))
+            XCTAssertEqual(BridgePacket(encoded: Data(bytes)), packet)
+        }
+        for bytes: [UInt8] in [[15, 0, 0, 0], [16, 2, 1], [16, 1, 2], [17, 0, 0, 0, 0, 0]] {
+            XCTAssertNil(BridgePacket(encoded: Data(bytes)))
+        }
+    }
+
     func testInvalidPacketsAreRejected() {
         XCTAssertNil(BridgePacket(encoded: Data()))
         XCTAssertNil(BridgePacket(encoded: Data([1, 0, 30, 3])))
