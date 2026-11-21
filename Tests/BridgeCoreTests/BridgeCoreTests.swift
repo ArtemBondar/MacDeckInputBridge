@@ -174,6 +174,20 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(try receiver.open(combined: frames[1]), .key(code: 30, value: 1))
     }
 
+    func testPointerButtonOwnershipAcrossToggle() {
+        var state = PointerButtonState()
+        XCTAssertEqual(state.handle(button: 0, pressed: true), .pass)
+        state.start()
+        XCTAssertEqual(state.handle(button: 0, pressed: false), .pass)
+        XCTAssertEqual(state.handle(button: 1, pressed: true), .send(button: 1, pressed: true))
+        XCTAssertEqual(state.stop(), [1])
+        state.start()
+        XCTAssertEqual(state.handle(button: 1, pressed: false), .suppress)
+        XCTAssertEqual(state.stop(), [])
+        XCTAssertEqual(state.handle(button: 1, pressed: true), .pass)
+        XCTAssertEqual(state.handle(button: 1, pressed: false), .pass)
+    }
+
     func testPointerPacketWireFixtures() {
         let fixtures: [(BridgePacket, [UInt8])] = [
             (.pointerMotion(dx: -32768, dy: 32767), [15, 128, 0, 127, 255]),
