@@ -8,12 +8,14 @@ public struct BridgeSettings: Equatable, Sendable {
     /// Clipboard contents themselves are never persisted.
     public var syncClipboardFromMac: Bool
     public var syncClipboardFromDeck: Bool
+    public var forwardPointer: Bool
 
-    public init(host: String, port: UInt16 = 4242, syncClipboardFromMac: Bool = false, syncClipboardFromDeck: Bool = false) {
+    public init(host: String, port: UInt16 = 4242, syncClipboardFromMac: Bool = false, syncClipboardFromDeck: Bool = false, forwardPointer: Bool = false) {
         self.host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         self.port = port
         self.syncClipboardFromMac = syncClipboardFromMac
         self.syncClipboardFromDeck = syncClipboardFromDeck
+        self.forwardPointer = forwardPointer
     }
 
     public func validated() throws -> BridgeSettings {
@@ -191,6 +193,7 @@ public final class BridgeSettingsStore {
         static let port = "deckPort"
         static let syncClipboardFromMac = "syncClipboardFromMac"
         static let syncClipboardFromDeck = "syncClipboardFromDeck"
+        static let forwardPointer = "forwardPointer"
         static let allowLocalSecretFallback = "allowLocalSecretFallback"
     }
     private let defaults: UserDefaults
@@ -214,7 +217,8 @@ public final class BridgeSettingsStore {
             host: defaults.string(forKey: Key.host) ?? "",
             port: port,
             syncClipboardFromMac: defaults.bool(forKey: Key.syncClipboardFromMac),
-            syncClipboardFromDeck: defaults.bool(forKey: Key.syncClipboardFromDeck)
+            syncClipboardFromDeck: defaults.bool(forKey: Key.syncClipboardFromDeck),
+            forwardPointer: defaults.bool(forKey: Key.forwardPointer)
         )
     }
 
@@ -224,6 +228,7 @@ public final class BridgeSettingsStore {
         defaults.set(Int(validated.port), forKey: Key.port)
         defaults.set(validated.syncClipboardFromMac, forKey: Key.syncClipboardFromMac)
         defaults.set(validated.syncClipboardFromDeck, forKey: Key.syncClipboardFromDeck)
+        defaults.set(validated.forwardPointer, forKey: Key.forwardPointer)
     }
 
     /// Existing installations retain their previous backend. A legacy fallback file

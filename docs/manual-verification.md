@@ -38,6 +38,17 @@ Perform this checklist on a MacBook and Steam Deck OLED in Desktop Mode before e
 - Exercise simultaneous changes, unsupported formats, oversized text and a missing compositor capability. Verify errors do not include clipboard text or secrets.
 - Test Gaming Mode separately and record the actual result; Desktop Mode results do not establish Gaming Mode support.
 
+# Pointer forwarding verification (not yet verified)
+
+- Install the built artifacts on a MacBook and Steam Deck in Desktop Mode under Wayland. Record both app versions, macOS and SteamOS versions, and the results below.
+- Confirm the pointer option defaults to off and normal local input remains available while connecting, disabled, and after a failed connection.
+- Enable the option and connect. Test relative motion across the entire Deck display, including when the Mac cursor starts at each physical screen edge, and assess speed.
+- Test left and right click, click-and-drag, and vertical and horizontal two-finger scrolling. Record direction and sensitivity.
+- Toggle off during a drag, stop the receiver during a drag, interrupt Wi-Fi, and cause an event-tap failure. Verify the Deck releases held buttons and the Mac pointer promptly resumes working normally.
+- Start forwarding while a local button is held; release it and verify neither computer receives a stuck or orphaned button. Repeat by rapidly toggling off and back on during a drag.
+- Test new Mac with old Deck and old Mac with new Deck. Confirm keyboard-only operation remains usable, pointer unavailability is clear, and the connection does not loop. Test missing `/dev/uinput` access and virtual-mouse creation failure.
+- Verify the installed app's settings are readable and scrollable at a constrained window size. Gaming Mode is out of scope; do not infer its behavior from Desktop Mode.
+
 # Child-process polling verification
 
 - On a stock Deck, enable and disable Mac input repeatedly and verify shutdown completes, input is released, and no receiver processes remain after disabling. Check normal layout sync and its diagnostics as above.

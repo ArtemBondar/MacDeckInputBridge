@@ -28,6 +28,9 @@ public enum BridgePacket: Equatable, Sendable {
     case pointerMotion(dx: Int16, dy: Int16)
     case pointerButton(button: UInt8, pressed: Bool)
     case pointerScroll(horizontal: Int16, vertical: Int16)
+    case clientReadyWithPointer
+    /// Bit 0 is layout sync, bit 1 is clipboard sync, bit 2 is pointer.
+    case serverReadyWithCapabilities(UInt8)
     case key(code: UInt16, value: UInt8)
     case releaseAll
     case ping
@@ -48,6 +51,10 @@ public enum BridgePacket: Equatable, Sendable {
 
     public func encoded() -> Data {
         switch self {
+        case .clientReadyWithPointer: return Data([18])
+        case let .serverReadyWithCapabilities(flags):
+            precondition(flags <= 7)
+            return Data([19, flags])
         case let .pointerMotion(dx, dy):
             var result = Data([15]); result.appendInteger(dx); result.appendInteger(dy); return result
         case let .pointerButton(button, pressed):
@@ -96,7 +103,10 @@ public enum BridgePacket: Equatable, Sendable {
 
     public init?(encoded: Data) {
         let bytes = Array(encoded)
-        if bytes.count == 5, bytes[0] == 15,
+        if bytes == [18] { self = .clientReadyWithPointer
+        } else if bytes.count == 2, bytes[0] == 19, bytes[1] <= 7 {
+            self = .serverReadyWithCapabilities(bytes[1])
+        } else if bytes.count == 5, bytes[0] == 15,
            let dx = Self.integer(bytes, offset: 1, as: UInt16.self),
            let dy = Self.integer(bytes, offset: 3, as: UInt16.self) {
             self = .pointerMotion(dx: Int16(bitPattern: dx), dy: Int16(bitPattern: dy))

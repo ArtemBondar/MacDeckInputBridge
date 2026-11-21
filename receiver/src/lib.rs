@@ -71,6 +71,8 @@ impl ClipboardDelivery {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Packet {
+    ClientReadyWithPointer,
+    ServerReadyWithCapabilities(u8),
     /// Reserved for negotiated pointer sessions.
     PointerMotion {
         dx: i16,
@@ -141,6 +143,11 @@ pub enum BridgeError {
 impl Packet {
     pub fn encode(&self) -> Vec<u8> {
         match self {
+            Self::ClientReadyWithPointer => vec![18],
+            Self::ServerReadyWithCapabilities(flags) => {
+                assert!(*flags <= 7);
+                vec![19, *flags]
+            }
             Self::PointerMotion { dx, dy } => {
                 let mut result = vec![15];
                 result.extend(dx.to_be_bytes());
@@ -226,6 +233,8 @@ impl Packet {
 
     pub fn decode(bytes: &[u8]) -> Result<Self, BridgeError> {
         match bytes {
+            [18] => Ok(Self::ClientReadyWithPointer),
+            [19, flags @ 0..=7] => Ok(Self::ServerReadyWithCapabilities(*flags)),
             [15, dxh, dxl, dyh, dyl] => Ok(Self::PointerMotion {
                 dx: i16::from_be_bytes([*dxh, *dxl]),
                 dy: i16::from_be_bytes([*dyh, *dyl]),
@@ -703,6 +712,8 @@ mod tests {
     #[test]
     fn pointer_packet_wire_fixtures_and_invalid_values() {
         let fixtures = [
+            (Packet::ClientReadyWithPointer, vec![18]),
+            (Packet::ServerReadyWithCapabilities(7), vec![19, 7]),
             (
                 Packet::PointerMotion {
                     dx: i16::MIN,
@@ -741,6 +752,7 @@ mod tests {
             &[16, 2, 1],
             &[16, 1, 2],
             &[17, 0, 0, 0, 0, 0],
+            &[19, 8],
         ] {
             assert!(Packet::decode(bytes).is_err());
         }

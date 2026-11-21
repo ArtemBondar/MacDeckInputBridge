@@ -190,6 +190,8 @@ final class BridgeCoreTests: XCTestCase {
 
     func testPointerPacketWireFixtures() {
         let fixtures: [(BridgePacket, [UInt8])] = [
+            (.clientReadyWithPointer, [18]),
+            (.serverReadyWithCapabilities(7), [19, 7]),
             (.pointerMotion(dx: -32768, dy: 32767), [15, 128, 0, 127, 255]),
             (.pointerScroll(horizontal: -1, vertical: 256), [17, 255, 255, 1, 0]),
             (.pointerButton(button: 1, pressed: true), [16, 1, 1]),
@@ -199,7 +201,7 @@ final class BridgeCoreTests: XCTestCase {
             XCTAssertEqual(packet.encoded(), Data(bytes))
             XCTAssertEqual(BridgePacket(encoded: Data(bytes)), packet)
         }
-        for bytes: [UInt8] in [[15, 0, 0, 0], [16, 2, 1], [16, 1, 2], [17, 0, 0, 0, 0, 0]] {
+        for bytes: [UInt8] in [[15, 0, 0, 0], [16, 2, 1], [16, 1, 2], [17, 0, 0, 0, 0, 0], [19, 8]] {
             XCTAssertNil(BridgePacket(encoded: Data(bytes)))
         }
     }
@@ -748,9 +750,12 @@ final class BridgeCoreTests: XCTestCase {
         let store = BridgeSettingsStore(defaults: defaults, secretStore: InMemoryPairingSecretStore())
         XCTAssertFalse(store.loadSettings().syncClipboardFromMac)
         XCTAssertFalse(store.loadSettings().syncClipboardFromDeck)
+        XCTAssertFalse(store.loadSettings().forwardPointer)
         try store.saveSettings(BridgeSettings(host: "deck.local", syncClipboardFromMac: true, syncClipboardFromDeck: true))
         XCTAssertTrue(store.loadSettings().syncClipboardFromMac)
         XCTAssertTrue(store.loadSettings().syncClipboardFromDeck)
+        try store.saveSettings(BridgeSettings(host: "deck.local", forwardPointer: true))
+        XCTAssertTrue(store.loadSettings().forwardPointer)
     }
 }
 

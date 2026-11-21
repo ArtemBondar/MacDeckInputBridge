@@ -4,6 +4,18 @@ import XCTest
 
 @MainActor
 final class SettingsWindowControllerTests: XCTestCase {
+    func testPointerForwardingRequiresOptIn() {
+        let controller = SettingsWindowController()
+        var saved: SettingsDraft?
+        controller.show(draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "")) {
+            saved = $0
+            return nil
+        }
+        XCTAssertEqual(controller.forwardPointerCheckbox.state, .off)
+        controller.forwardPointerCheckbox.state = .on
+        controller.saveButton.performClick(nil)
+        XCTAssertEqual(saved?.forwardPointer, true)
+    }
     func testConnectingPreviewAnimatesBothStylesAndStopsOnClose() throws {
         let controller = SettingsWindowController()
         controller.show(draft: SettingsDraft(host: "deck.local", port: "4242", pairingSecret: "")) { _ in nil }
