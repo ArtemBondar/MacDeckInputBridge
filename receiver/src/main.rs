@@ -1814,7 +1814,7 @@ mod receiver_tests {
     #[test]
     fn pointer_packets_require_capability_and_release_with_keyboard() {
         let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
-        for enabled in [false, true] {
+        for (enabled, explicit_release) in [(false, false), (true, true), (true, false)] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let server_pairing = pairing.clone();
@@ -1867,24 +1867,21 @@ mod receiver_tests {
                         },
                     )
                     .unwrap();
-                session
-                    .write_packet(&mut client, 4, &Packet::ReleaseAll)
-                    .unwrap();
+                if explicit_release {
+                    session
+                        .write_packet(&mut client, 4, &Packet::ReleaseAll)
+                        .unwrap();
+                }
             }
             drop(client);
             let (result, pointer) = server.join().unwrap();
             assert!(result.is_err());
             if enabled {
-                assert_eq!(
-                    pointer.events,
-                    [
-                        "button:0,true",
-                        "move:-3,4",
-                        "scroll:1,-1",
-                        "release",
-                        "release"
-                    ]
-                );
+                let mut expected = vec!["button:0,true", "move:-3,4", "scroll:1,-1", "release"];
+                if explicit_release {
+                    expected.push("release");
+                }
+                assert_eq!(pointer.events, expected);
                 assert!(pointer.held.is_empty());
             } else {
                 assert!(pointer.events.is_empty());
