@@ -216,6 +216,16 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertNil(buffer.drain())
     }
 
+    func testBufferedScrollPrecedesForwardedModifierRelease() {
+        var buffer = PointerEventBuffer()
+        XCTAssertNil(buffer.appendScroll(x: 0, y: 2))
+        let release = BridgePacket.key(code: 29, value: 0)
+        XCTAssertEqual(buffer.drain(before: release), [
+            .pointerScroll(horizontal: 0, vertical: 2), release
+        ])
+        XCTAssertEqual(buffer.drain(before: release), [release])
+    }
+
     func testPreciseScrollAccumulatesFractionalSteps() {
         var scroll = ScrollDeltaRemainder()
         let first = scroll.append(x: 0.4, y: -0.4)

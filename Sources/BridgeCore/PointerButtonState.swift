@@ -90,6 +90,12 @@ struct PointerEventBuffer {
         case .scroll: return .pointerScroll(horizontal: Int16(x), vertical: Int16(y))
         }
     }
+
+    /// A keyboard transition must not overtake a queued pointer event.
+    mutating func drain(before packet: BridgePacket) -> [BridgePacket] {
+        if let pending = drain() { return [pending, packet] }
+        return [packet]
+    }
 }
 
 /// Converts precise fractional wheel deltas into the receiver's whole steps.

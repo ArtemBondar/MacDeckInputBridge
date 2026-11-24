@@ -251,7 +251,9 @@ public final class SenderController {
             case .passThrough: break
             case let .suppress(packet):
                 sendCurrentLayoutIfNeeded()
-                client?.send(packet)
+                for orderedPacket in pointerBuffer.drain(before: packet) {
+                    client?.send(orderedPacket)
+                }
                 suppress = true
             case .beginConnection:
                 guard let settings else { break }

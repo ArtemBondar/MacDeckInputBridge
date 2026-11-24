@@ -255,6 +255,9 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         clipboardGuidance.textColor = .secondaryLabelColor
         clipboardGuidance.font = .systemFont(ofSize: 12)
         clipboardGuidance.maximumNumberOfLines = 2
+        let pointerGuidance = NSTextField(wrappingLabelWithString: "macOS may still handle system trackpad gestures while pointer forwarding is active.")
+        pointerGuidance.textColor = .secondaryLabelColor
+        pointerGuidance.font = .systemFont(ofSize: 12)
         let inputSourceTitle = label("Current Mac layout ID", font: .systemFont(ofSize: 13, weight: .medium))
         currentInputSourceLabel.textColor = .secondaryLabelColor
         currentInputSourceLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -307,8 +310,9 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             useKeychainForPairingSecretCheckbox,
             syncClipboardCheckbox,
             syncClipboardFromDeckCheckbox,
-            forwardPointerCheckbox,
             clipboardGuidance,
+            forwardPointerCheckbox,
+            pointerGuidance,
             inputSourceTitle,
             currentInputSourceLabel,
             showInDockCheckbox,
