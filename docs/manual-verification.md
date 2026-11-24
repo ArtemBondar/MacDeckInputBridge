@@ -45,12 +45,16 @@ Perform this checklist on a MacBook and Steam Deck OLED in Desktop Mode before e
 
 ### Accessibility permission navigation
 
-- With the installed Mac app denied Accessibility access and System Settings quit,
-  try sending input: verify the normal macOS permission prompt remains available.
+- With the installed Mac app absent from the Accessibility list, launch it and
+  try sending input while System Settings is already open: verify the initial
+  macOS permission request registers MacDeck in the list. Repeat with Settings
+  quit. The first request per launch may show the system prompt.
 - Open the Accessibility permission page, leave MacDeck disabled, and try sending
   input repeatedly: verify Settings comes forward without another permission popup.
 - Repeat with Settings minimized and with a different Settings pane selected;
   verify the Accessibility page is restored. macOS controls pane routing, so check
   this on each supported macOS version.
+- Remove the MacDeck entry (or reset its permission), quit and reopen MacDeck,
+  and verify an explicit request is available again; no persisted flag may skip it.
 - Enable MacDeck, relaunch if macOS requires it, and verify input starts without
   opening Settings or showing a permission prompt.

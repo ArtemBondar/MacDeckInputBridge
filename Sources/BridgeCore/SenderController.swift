@@ -24,6 +24,7 @@ public final class SenderController {
     public var deckClipboardReceived: ((Bool) -> Void)?
 
     private var state = InputStateMachine()
+    private var accessibilityPermission = AccessibilityPermission()
     private var client: SenderClient?
     private var settings: BridgeSettings?
     private var eventTap: CFMachPort?
@@ -118,7 +119,7 @@ public final class SenderController {
     public func start() throws {
         guard client != nil, settings != nil else { throw SenderControllerError.notConfigured }
         guard eventTap == nil else { return }
-        guard AccessibilityPermission.checkAndRequest() else {
+        guard accessibilityPermission.checkAndRequest() else {
             throw SenderControllerError.accessibilityPermissionRequired
         }
 
