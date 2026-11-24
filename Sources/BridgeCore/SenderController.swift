@@ -36,7 +36,8 @@ public final class SenderController {
     private var pointerBuffer = PointerEventBuffer()
     private var scrollRemainder = ScrollDeltaRemainder()
     private var pointerTimer: Timer?
-    private static let pointerActivationDelay: TimeInterval = 0.1
+    /// Give macOS a bounded time to notify us that activation completed.
+    private static let pointerActivationTimeout: TimeInterval = 1.0
     private static let pointerBatchInterval: TimeInterval = 1.0 / 120.0
     private var runLoopSource: CFRunLoopSource?
     private var layoutSyncEnabled = false
@@ -301,18 +302,30 @@ public final class SenderController {
         pointerActivationGeneration &+= 1
         let generation = pointerActivationGeneration
         pointerPreviousApp = NSWorkspace.shared.frontmostApplication
-        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
-        // Cursor disassociation is documented only for the foreground app.
-        // Activation is asynchronous, so do not attempt it in the same turn.
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pointerActivationDelay) { [weak self] in
+        pointerFocusObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in
             guard let self, self.pointerActivationGeneration == generation,
                   self.state.mode == .remote else { return }
-            guard NSRunningApplication.current.isActive else {
-                self.stopPointer()
+            if NSRunningApplication.current.isActive {
+                if !self.pointerActive { self.activatePointer() }
+            } else if self.pointerActive {
+                // Disassociation no longer has its documented foreground guarantee.
+                self.client?.close()
+                self.connectionLost()
                 self.pointerUnavailable?()
-                return
             }
-            self.activatePointer()
+        }
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        // Cursor disassociation is documented only for the foreground app.
+        // Activation can complete before its workspace notification arrives.
+        if pointerActivationGeneration == generation, !pointerActive,
+           NSRunningApplication.current.isActive { activatePointer() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pointerActivationTimeout) { [weak self] in
+            guard let self, self.pointerActivationGeneration == generation,
+                  self.state.mode == .remote, !self.pointerActive else { return }
+            self.stopPointer()
+            self.pointerUnavailable?()
         }
     }
 
@@ -324,16 +337,6 @@ public final class SenderController {
         }
         pointerState.start()
         pointerActive = true
-        pointerFocusObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            guard let self, self.pointerActive, !NSRunningApplication.current.isActive else { return }
-            // Disassociation no longer has its documented foreground guarantee.
-            // Return both inputs to local rather than unexpectedly forwarding.
-            self.client?.close()
-            self.connectionLost()
-            self.pointerUnavailable?()
-        }
         pointerTimer = Timer.scheduledTimer(withTimeInterval: Self.pointerBatchInterval, repeats: true) { [weak self] _ in
             self?.flushPointer()
         }
