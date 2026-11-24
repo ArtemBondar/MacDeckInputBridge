@@ -44,6 +44,8 @@ Perform this checklist on a MacBook and Steam Deck OLED in Desktop Mode before e
 - Confirm the pointer option defaults to off and normal local input remains available while connecting, disabled, and after a failed connection.
 - Enable the option and connect. Test relative motion across the entire Deck display, including when the Mac cursor starts at each physical screen edge, and assess speed.
 - Test left and right click, click-and-drag, and vertical and horizontal two-finger scrolling. Record direction and sensitivity.
+- With pointer forwarding active, check the Mac cursor remains stationary while the Deck pointer moves smoothly. Verify slow, fast, and long movements and check the Mac cursor does not drift at display edges. Record whether two-finger scrolling reaches the Deck without scrolling the Mac.
+- Activate another Mac application while forwarding and confirm input returns locally. Check that the previously active application regains focus on an ordinary toggle-off. Test failed activation and activation cancelled while connecting.
 - Toggle off during a drag, stop the receiver during a drag, interrupt Wi-Fi, and cause an event-tap failure. Verify the Deck releases held buttons and the Mac pointer promptly resumes working normally.
 - Start forwarding while a local button is held; release it and verify neither computer receives a stuck or orphaned button. Repeat by rapidly toggling off and back on during a drag.
 - Test new Mac with old Deck and old Mac with new Deck. Confirm keyboard-only operation remains usable, pointer unavailability is clear, and the connection does not loop. Test missing `/dev/uinput` access and virtual-mouse creation failure.

@@ -30,11 +30,14 @@ public final class SenderController {
     private var eventTap: CFMachPort?
     private var pointerState = PointerButtonState()
     private var pointerActive = false
-    private var motionX: Int = 0
-    private var motionY: Int = 0
-    private var scrollX: Int = 0
-    private var scrollY: Int = 0
+    private var pointerActivationGeneration: UInt64 = 0
+    private var pointerPreviousApp: NSRunningApplication?
+    private var pointerFocusObserver: NSObjectProtocol?
+    private var pointerBuffer = PointerEventBuffer()
+    private var scrollRemainder = ScrollDeltaRemainder()
     private var pointerTimer: Timer?
+    private static let pointerActivationDelay: TimeInterval = 0.1
+    private static let pointerBatchInterval: TimeInterval = 1.0 / 120.0
     private var runLoopSource: CFRunLoopSource?
     private var layoutSyncEnabled = false
     private var clipboardSyncEnabled = false
@@ -72,6 +75,7 @@ public final class SenderController {
 
     deinit {
         if pointerActive { CGAssociateMouseAndMouseCursorPosition(boolean_t(1)) }
+        if let pointerFocusObserver { NSWorkspace.shared.notificationCenter.removeObserver(pointerFocusObserver) }
         inputSourceSettlementWorkItem?.cancel()
         clipboardTimer?.invalidate()
         pointerTimer?.invalidate()
@@ -156,12 +160,10 @@ public final class SenderController {
         ) else { throw SenderControllerError.eventTapUnavailable }
 
         eventTap = tap
-        if CGEventSource.buttonState(.combinedSessionState, button: .left) {
-            _ = pointerState.handle(button: 0, pressed: true)
-        }
-        if CGEventSource.buttonState(.combinedSessionState, button: .right) {
-            _ = pointerState.handle(button: 1, pressed: true)
-        }
+        var pressed: Set<UInt8> = []
+        if CGEventSource.buttonState(.combinedSessionState, button: .left) { pressed.insert(0) }
+        if CGEventSource.buttonState(.combinedSessionState, button: .right) { pressed.insert(1) }
+        pointerState.reconcile(pressed: pressed)
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
@@ -296,39 +298,73 @@ public final class SenderController {
 
     private func startPointer() {
         guard state.mode == .remote, !pointerActive else { return }
+        pointerActivationGeneration &+= 1
+        let generation = pointerActivationGeneration
+        pointerPreviousApp = NSWorkspace.shared.frontmostApplication
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        // Cursor disassociation is documented only for the foreground app.
+        // Activation is asynchronous, so do not attempt it in the same turn.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pointerActivationDelay) { [weak self] in
+            guard let self, self.pointerActivationGeneration == generation,
+                  self.state.mode == .remote else { return }
+            guard NSRunningApplication.current.isActive else {
+                self.stopPointer()
+                self.pointerUnavailable?()
+                return
+            }
+            self.activatePointer()
+        }
+    }
+
+    private func activatePointer() {
         guard CGAssociateMouseAndMouseCursorPosition(boolean_t(0)) == .success else {
+            stopPointer()
             pointerUnavailable?()
             return
         }
         pointerState.start()
         pointerActive = true
-        pointerTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+        pointerFocusObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.pointerActive, !NSRunningApplication.current.isActive else { return }
+            // Disassociation no longer has its documented foreground guarantee.
+            // Return both inputs to local rather than unexpectedly forwarding.
+            self.client?.close()
+            self.connectionLost()
+            self.pointerUnavailable?()
+        }
+        pointerTimer = Timer.scheduledTimer(withTimeInterval: Self.pointerBatchInterval, repeats: true) { [weak self] _ in
             self?.flushPointer()
         }
         if let pointerTimer { RunLoop.main.add(pointerTimer, forMode: .common) }
     }
 
     private func stopPointer() {
-        guard pointerActive else { return }
-        flushPointer()
-        _ = pointerState.stop()
+        pointerActivationGeneration &+= 1
+        if pointerActive {
+            flushPointer()
+            _ = pointerState.stop()
+            CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
+        }
         pointerTimer?.invalidate()
         pointerTimer = nil
         pointerActive = false
-        motionX = 0; motionY = 0; scrollX = 0; scrollY = 0
-        CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
+        pointerBuffer = PointerEventBuffer()
+        scrollRemainder = ScrollDeltaRemainder()
+        if let pointerFocusObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(pointerFocusObserver)
+            self.pointerFocusObserver = nil
+        }
+        if NSRunningApplication.current.isActive, let previous = pointerPreviousApp,
+           previous.processIdentifier != NSRunningApplication.current.processIdentifier {
+            previous.activate(options: [.activateIgnoringOtherApps])
+        }
+        pointerPreviousApp = nil
     }
 
     private func flushPointer() {
-        func take(_ value: inout Int) -> Int16 {
-            let result = max(Int(Int16.min), min(Int(Int16.max), value))
-            value -= result
-            return Int16(result)
-        }
-        let x = take(&motionX), y = take(&motionY)
-        if x != 0 || y != 0 { client?.send(.pointerMotion(dx: x, dy: y)) }
-        let horizontal = take(&scrollX), vertical = take(&scrollY)
-        if horizontal != 0 || vertical != 0 { client?.send(.pointerScroll(horizontal: horizontal, vertical: vertical)) }
+        if let packet = pointerBuffer.drain() { client?.send(packet) }
     }
 
     private func handlePointer(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -341,13 +377,24 @@ public final class SenderController {
         case .rightMouseUp: button = 1; pressed = false
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged:
             guard pointerActive else { return Unmanaged.passUnretained(event) }
-            motionX = max(-32768, min(32767, motionX + Int(event.getIntegerValueField(.mouseEventDeltaX))))
-            motionY = max(-32768, min(32767, motionY + Int(event.getIntegerValueField(.mouseEventDeltaY))))
+            if let previous = pointerBuffer.appendMotion(
+                x: Int(event.getIntegerValueField(.mouseEventDeltaX)),
+                y: Int(event.getIntegerValueField(.mouseEventDeltaY))
+            ) { client?.send(previous) }
             return nil
         case .scrollWheel:
             guard pointerActive else { return Unmanaged.passUnretained(event) }
-            scrollY = max(-32768, min(32767, scrollY + Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis1))))
-            scrollX = max(-32768, min(32767, scrollX + Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis2))))
+            let x: Int, y: Int
+            if event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0 {
+                (x, y) = scrollRemainder.append(
+                    x: event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2),
+                    y: event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1)
+                )
+            } else {
+                x = Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis2))
+                y = Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis1))
+            }
+            if let previous = pointerBuffer.appendScroll(x: x, y: y) { client?.send(previous) }
             return nil
         default: return Unmanaged.passUnretained(event)
         }
@@ -719,6 +766,10 @@ final class ClipboardCapabilityState {
 
 private final class SenderClient {
     private static let maximumReceiveLength = SessionFramer.maximumFrameSize + 4
+    // Allows more than two seconds of 120 Hz pointer batches while bounding
+    // queued encrypted frames. A stalled connection fails closed so releases
+    // cannot be delayed indefinitely behind an unbounded backlog.
+    private static let maximumPendingFrames = 256
 
     private struct Endpoint {
         let host: String
@@ -808,10 +859,14 @@ private final class SenderClient {
         incomingClipboard = nil
         deckClipboardAllowed = false
 
+        let parameters = NWParameters.tcp
+        if let tcp = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
+            tcp.noDelay = true
+        }
         let connection = NWConnection(
             host: NWEndpoint.Host(endpoint.host),
             port: NWEndpoint.Port(rawValue: endpoint.port)!,
-            using: .tcp
+            using: parameters
         )
         self.connection = connection
         connection.stateUpdateHandler = { [weak self] state in
@@ -932,7 +987,7 @@ private final class SenderClient {
 
     private func sendPacket(_ packet: BridgePacket, generation: UInt64) throws {
         guard activeGeneration == generation, let connection, var session else { throw ProtocolError.invalidFrame }
-        guard pendingFrames < 256 else { throw ProtocolError.invalidFrame }
+        guard pendingFrames < Self.maximumPendingFrames else { throw ProtocolError.invalidFrame }
         let frame = try session.seal(packet)
         pendingFrames += 1
         self.session = session

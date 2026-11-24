@@ -126,6 +126,10 @@ available and the Mac reports that pointer forwarding is unavailable.
 Pointer forwarding is intended for Desktop Mode. Movement, clicks, dragging,
 scroll direction and sensitivity still require verification on a MacBook and
 Steam Deck; pinch and multi-finger gestures are not included.
+MacDeck needs to become the active Mac application while forwarding the pointer.
+If another Mac application becomes active, forwarding stops and input returns
+to the Mac. The feature is intended to forward two-finger scrolling; pinch and
+system gestures are not forwarded.
 
 ## Clipboard sync (optional)
 

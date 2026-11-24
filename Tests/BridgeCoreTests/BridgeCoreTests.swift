@@ -188,6 +188,44 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(state.handle(button: 1, pressed: false), .pass)
     }
 
+    func testPointerButtonStateReconcilesEventsMissedWhileTapStopped() {
+        var state = PointerButtonState()
+        state.start()
+        XCTAssertEqual(state.handle(button: 0, pressed: true), .send(button: 0, pressed: true))
+        XCTAssertEqual(state.stop(), [0])
+        // The physical release happened while the event tap was stopped.
+        state.reconcile(pressed: [])
+        state.start()
+        XCTAssertEqual(state.handle(button: 0, pressed: true), .send(button: 0, pressed: true))
+        XCTAssertEqual(state.handle(button: 0, pressed: false), .send(button: 0, pressed: false))
+
+        _ = state.stop()
+        state.reconcile(pressed: [1])
+        state.start()
+        XCTAssertEqual(state.handle(button: 1, pressed: false), .pass)
+        XCTAssertEqual(state.handle(button: 1, pressed: true), .send(button: 1, pressed: true))
+    }
+
+    func testPointerBufferPreservesMotionAndScrollOrder() {
+        var buffer = PointerEventBuffer()
+        XCTAssertNil(buffer.appendScroll(x: 0, y: 2))
+        XCTAssertEqual(buffer.appendMotion(x: 3, y: 4), .pointerScroll(horizontal: 0, vertical: 2))
+        XCTAssertNil(buffer.appendMotion(x: -1, y: 1))
+        XCTAssertEqual(buffer.appendScroll(x: 1, y: 0), .pointerMotion(dx: 2, dy: 5))
+        XCTAssertEqual(buffer.drain(), .pointerScroll(horizontal: 1, vertical: 0))
+        XCTAssertNil(buffer.drain())
+    }
+
+    func testPreciseScrollAccumulatesFractionalSteps() {
+        var scroll = ScrollDeltaRemainder()
+        let first = scroll.append(x: 0.4, y: -0.4)
+        XCTAssertEqual(first.0, 0); XCTAssertEqual(first.1, 0)
+        let second = scroll.append(x: 0.7, y: -0.7)
+        XCTAssertEqual(second.0, 1); XCTAssertEqual(second.1, -1)
+        let third = scroll.append(x: .nan, y: .infinity)
+        XCTAssertEqual(third.0, 0); XCTAssertEqual(third.1, 0)
+    }
+
     func testPointerPacketWireFixtures() {
         let fixtures: [(BridgePacket, [UInt8])] = [
             (.clientReadyWithPointer, [18]),
