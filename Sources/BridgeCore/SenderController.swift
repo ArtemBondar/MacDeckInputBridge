@@ -135,8 +135,9 @@ public final class SenderController {
     public func start() throws {
         guard client != nil, settings != nil else { throw SenderControllerError.notConfigured }
         guard eventTap == nil else { return }
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        guard AXIsProcessTrustedWithOptions(options) else { throw SenderControllerError.accessibilityPermissionRequired }
+        guard AccessibilityPermission.checkAndRequest() else {
+            throw SenderControllerError.accessibilityPermissionRequired
+        }
 
         let mask = (1 << CGEventType.keyDown.rawValue) |
             (1 << CGEventType.keyUp.rawValue) |
