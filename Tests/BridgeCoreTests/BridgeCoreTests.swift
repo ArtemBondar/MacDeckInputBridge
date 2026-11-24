@@ -226,6 +226,17 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(buffer.drain(before: release), [release])
     }
 
+    func testLocalScrollFallbackOnlyConsumesWhileForwarding() throws {
+        let cgEvent = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line,
+                                           wheelCount: 1, wheel1: 1, wheel2: 0, wheel3: 0))
+        let event = try XCTUnwrap(NSEvent(cgEvent: cgEvent))
+        var sent = 0
+        XCTAssertNotNil(PointerScrollFallback.route(event, forwarding: false) { _ in sent += 1 })
+        XCTAssertEqual(sent, 0)
+        XCTAssertNil(PointerScrollFallback.route(event, forwarding: true) { _ in sent += 1 })
+        XCTAssertEqual(sent, 1)
+    }
+
     func testPreciseScrollAccumulatesFractionalSteps() {
         var scroll = ScrollDeltaRemainder()
         let first = scroll.append(x: 0.4, y: -0.4)

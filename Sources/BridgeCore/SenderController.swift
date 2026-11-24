@@ -33,6 +33,7 @@ public final class SenderController {
     private var pointerActivationGeneration: UInt64 = 0
     private var pointerPreviousApp: NSRunningApplication?
     private var pointerFocusObserver: NSObjectProtocol?
+    private var pointerScrollMonitor: Any?
     private var pointerBuffer = PointerEventBuffer()
     private var scrollRemainder = ScrollDeltaRemainder()
     private var pointerTimer: Timer?
@@ -77,6 +78,7 @@ public final class SenderController {
     deinit {
         if pointerActive { CGAssociateMouseAndMouseCursorPosition(boolean_t(1)) }
         if let pointerFocusObserver { NSWorkspace.shared.notificationCenter.removeObserver(pointerFocusObserver) }
+        if let pointerScrollMonitor { NSEvent.removeMonitor(pointerScrollMonitor) }
         inputSourceSettlementWorkItem?.cancel()
         clipboardTimer?.invalidate()
         pointerTimer?.invalidate()
@@ -339,6 +341,12 @@ public final class SenderController {
         }
         pointerState.start()
         pointerActive = true
+        pointerScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self else { return event }
+            return PointerScrollFallback.route(event, forwarding: self.pointerActive) { cgEvent in
+                _ = self.handlePointer(type: .scrollWheel, event: cgEvent)
+            }
+        }
         pointerTimer = Timer.scheduledTimer(withTimeInterval: Self.pointerBatchInterval, repeats: true) { [weak self] _ in
             self?.flushPointer()
         }
@@ -355,6 +363,10 @@ public final class SenderController {
         pointerTimer?.invalidate()
         pointerTimer = nil
         pointerActive = false
+        if let pointerScrollMonitor {
+            NSEvent.removeMonitor(pointerScrollMonitor)
+            self.pointerScrollMonitor = nil
+        }
         pointerBuffer = PointerEventBuffer()
         scrollRemainder = ScrollDeltaRemainder()
         if let pointerFocusObserver {
