@@ -9,6 +9,7 @@ public struct SettingsDraft: Equatable {
     public var useKeychainForPairingSecret: Bool
     public var syncClipboardFromMac: Bool
     public var syncClipboardFromDeck: Bool
+    public var forwardPointer: Bool
     public var currentInputSourceID: String?
 
     public init(
@@ -20,6 +21,7 @@ public struct SettingsDraft: Equatable {
         useKeychainForPairingSecret: Bool = false,
         syncClipboardFromMac: Bool = false,
         syncClipboardFromDeck: Bool = false,
+        forwardPointer: Bool = false,
         currentInputSourceID: String? = nil
     ) {
         self.host = host
@@ -30,6 +32,7 @@ public struct SettingsDraft: Equatable {
         self.useKeychainForPairingSecret = useKeychainForPairingSecret
         self.syncClipboardFromMac = syncClipboardFromMac
         self.syncClipboardFromDeck = syncClipboardFromDeck
+        self.forwardPointer = forwardPointer
         self.currentInputSourceID = currentInputSourceID
     }
 }
@@ -61,6 +64,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         target: nil,
         action: nil
     )
+    public let forwardPointerCheckbox = NSButton(checkboxWithTitle: "Forward Mac pointer to Steam Deck", target: nil, action: nil)
     public let currentInputSourceLabel = NSTextField(wrappingLabelWithString: "")
     public let messageLabel = NSTextField(wrappingLabelWithString: "")
     public let saveButton = NSButton(title: "Save", target: nil, action: nil)
@@ -104,6 +108,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         useKeychainForPairingSecretCheckbox.state = draft.useKeychainForPairingSecret ? .on : .off
         syncClipboardCheckbox.state = draft.syncClipboardFromMac ? .on : .off
         syncClipboardFromDeckCheckbox.state = draft.syncClipboardFromDeck ? .on : .off
+        forwardPointerCheckbox.state = draft.forwardPointer ? .on : .off
         currentInputSourceLabel.stringValue = draft.currentInputSourceID ?? "Unavailable"
         messageLabel.stringValue = notice ?? ""
         messageLabel.textColor = isInformationalNotice(notice) ? .secondaryLabelColor : .systemRed
@@ -182,7 +187,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             iconStyle: selectedIconStyle,
             useKeychainForPairingSecret: useKeychainForPairingSecretCheckbox.state == .on,
             syncClipboardFromMac: syncClipboardCheckbox.state == .on,
-            syncClipboardFromDeck: syncClipboardFromDeckCheckbox.state == .on
+            syncClipboardFromDeck: syncClipboardFromDeckCheckbox.state == .on,
+            forwardPointer: forwardPointerCheckbox.state == .on
         )
         if let error = onSave?(draft) {
             messageLabel.stringValue = error
@@ -228,9 +234,17 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     }
 
     private func buildContent(in window: NSWindow) {
+        let scroll = NSScrollView()
+        scroll.scrollerStyle = .overlay
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        window.contentView = scroll
         let root = NSView()
         root.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView = root
+        scroll.documentView = root
+        root.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
+        root.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor).isActive = true
 
         let deckTitle = label("Steam Deck", font: .systemFont(ofSize: 20, weight: .semibold))
         let pairingTitle = label("Pairing", font: .systemFont(ofSize: 20, weight: .semibold))
@@ -241,6 +255,9 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         clipboardGuidance.textColor = .secondaryLabelColor
         clipboardGuidance.font = .systemFont(ofSize: 12)
         clipboardGuidance.maximumNumberOfLines = 2
+        let pointerGuidance = NSTextField(wrappingLabelWithString: "MacDeck leaves trackpad gestures on the Mac and also sends two-finger scroll events to the Steam Deck.")
+        pointerGuidance.textColor = .secondaryLabelColor
+        pointerGuidance.font = .systemFont(ofSize: 12)
         let inputSourceTitle = label("Current Mac layout ID", font: .systemFont(ofSize: 13, weight: .medium))
         currentInputSourceLabel.textColor = .secondaryLabelColor
         currentInputSourceLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -294,6 +311,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             syncClipboardCheckbox,
             syncClipboardFromDeckCheckbox,
             clipboardGuidance,
+            forwardPointerCheckbox,
+            pointerGuidance,
             inputSourceTitle,
             currentInputSourceLabel,
             showInDockCheckbox,
@@ -311,7 +330,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 28),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
             stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -24),
+            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24),
             hostField.widthAnchor.constraint(greaterThanOrEqualToConstant: 340),
             pairingSecretField.widthAnchor.constraint(greaterThanOrEqualToConstant: 340)
         ])

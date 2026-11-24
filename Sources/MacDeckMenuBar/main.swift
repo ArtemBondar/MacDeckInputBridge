@@ -56,6 +56,7 @@ private final class MenuBarModel: ObservableObject {
     @Published var useKeychainForPairingSecret: Bool
     @Published var syncClipboardFromMac: Bool
     @Published var syncClipboardFromDeck: Bool
+    @Published var forwardPointer: Bool
     @Published var status: SenderStatus = .local
     @Published var message: String?
     @Published var connectionAnimationPhase = 0
@@ -76,6 +77,7 @@ private final class MenuBarModel: ObservableObject {
         useKeychainForPairingSecret = store.usesKeychainForPairingSecret
         syncClipboardFromMac = settings.syncClipboardFromMac
         syncClipboardFromDeck = settings.syncClipboardFromDeck
+        forwardPointer = settings.forwardPointer
         do {
             pairingSecret = try store.loadSelectedPairingSecret() ?? ""
         } catch {
@@ -87,6 +89,9 @@ private final class MenuBarModel: ObservableObject {
         }
         sender.connectionFailed = { [weak self] in
             self?.message = "Connection was not established. Check the Steam Deck address, pairing secret, and that Mac input is enabled on the Deck."
+        }
+        sender.pointerUnavailable = { [weak self] in
+            self?.message = "Pointer forwarding is unavailable. Allow MacDeck to become active on the Mac, check the Steam Deck app version and input permissions, then reconnect. Keyboard forwarding can still be used."
         }
         sender.layoutSynchronizationWarning = { [weak self] in
             self?.message = "Keyboard-layout change was not confirmed. The Steam Deck kept its previous layout; switch the Mac input source again."
@@ -180,6 +185,7 @@ private final class MenuBarModel: ObservableObject {
                 useKeychainForPairingSecret: useKeychainForPairingSecret,
                 syncClipboardFromMac: syncClipboardFromMac,
                 syncClipboardFromDeck: syncClipboardFromDeck,
+                forwardPointer: forwardPointer,
                 currentInputSourceID: SenderController.currentKeyboardLayoutIdentifier()
             ),
             notice: message
@@ -196,6 +202,7 @@ private final class MenuBarModel: ObservableObject {
             showInDock = draft.showInDock
             syncClipboardFromMac = draft.syncClipboardFromMac
             syncClipboardFromDeck = draft.syncClipboardFromDeck
+            forwardPointer = draft.forwardPointer
             let settings = try settingsFromFields()
             let persistence = try store.saveSelectedPairingSecret(pairingSecret, useKeychain: draft.useKeychainForPairingSecret)
             useKeychainForPairingSecret = draft.useKeychainForPairingSecret
@@ -283,7 +290,8 @@ private final class MenuBarModel: ObservableObject {
             host: host,
             port: portValue,
             syncClipboardFromMac: syncClipboardFromMac,
-            syncClipboardFromDeck: syncClipboardFromDeck
+            syncClipboardFromDeck: syncClipboardFromDeck,
+            forwardPointer: forwardPointer
         ).validated()
     }
 }

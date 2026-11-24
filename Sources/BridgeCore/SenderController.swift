@@ -22,11 +22,25 @@ public final class SenderController {
     public var deckClipboardUnavailable: (() -> Void)?
     public var deckClipboardAvailable: (() -> Void)?
     public var deckClipboardReceived: ((Bool) -> Void)?
+    public var pointerUnavailable: (() -> Void)?
 
     private var state = InputStateMachine()
     private var client: SenderClient?
     private var settings: BridgeSettings?
     private var eventTap: CFMachPort?
+    private var pointerState = PointerButtonState()
+    private var pointerActive = false
+    private var pointerActivationGeneration: UInt64 = 0
+    private var pointerPreviousApp: NSRunningApplication?
+    private var pointerFocusObserver: NSObjectProtocol?
+    private var pointerBuffer = PointerEventBuffer()
+    private var scrollRemainder = ScrollDeltaRemainder()
+    private var pointerTimer: Timer?
+    /// Give macOS a bounded time to notify us that activation completed.
+    private static let pointerActivationTimeout: TimeInterval = 1.0
+    /// Target 240 Hz for coalesced motion while sending the first idle event
+    /// immediately. Ordering changes or a full batch may trigger earlier sends.
+    private static let pointerBatchInterval: TimeInterval = 1.0 / 240.0
     private var runLoopSource: CFRunLoopSource?
     private var layoutSyncEnabled = false
     private var clipboardSyncEnabled = false
@@ -63,8 +77,11 @@ public final class SenderController {
     }
 
     deinit {
+        if pointerActive { CGAssociateMouseAndMouseCursorPosition(boolean_t(1)) }
+        if let pointerFocusObserver { NSWorkspace.shared.notificationCenter.removeObserver(pointerFocusObserver) }
         inputSourceSettlementWorkItem?.cancel()
         clipboardTimer?.invalidate()
+        pointerTimer?.invalidate()
         if let cocoaInputSourceObserver {
             NotificationCenter.default.removeObserver(cocoaInputSourceObserver)
         }
@@ -84,7 +101,7 @@ public final class SenderController {
         self.settings = try settings.validated()
         stopClipboardMonitoring()
         client?.close()
-        client = try SenderClient(pairingSecret: pairingSecret)
+        client = try SenderClient(pairingSecret: pairingSecret, requestPointer: settings.forwardPointer)
         client?.onReady = { [weak self] generation, capabilities in
             DispatchQueue.main.async {
                 self?.activeClipboardGeneration = generation
@@ -123,7 +140,15 @@ public final class SenderController {
 
         let mask = (1 << CGEventType.keyDown.rawValue) |
             (1 << CGEventType.keyUp.rawValue) |
-            (1 << CGEventType.flagsChanged.rawValue)
+            (1 << CGEventType.flagsChanged.rawValue) |
+            (1 << CGEventType.mouseMoved.rawValue) |
+            (1 << CGEventType.leftMouseDown.rawValue) |
+            (1 << CGEventType.leftMouseUp.rawValue) |
+            (1 << CGEventType.rightMouseDown.rawValue) |
+            (1 << CGEventType.rightMouseUp.rawValue) |
+            (1 << CGEventType.leftMouseDragged.rawValue) |
+            (1 << CGEventType.rightMouseDragged.rawValue) |
+            (1 << CGEventType.scrollWheel.rawValue)
         let context = Unmanaged.passUnretained(self).toOpaque()
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -138,6 +163,10 @@ public final class SenderController {
         ) else { throw SenderControllerError.eventTapUnavailable }
 
         eventTap = tap
+        var pressed: Set<UInt8> = []
+        if CGEventSource.buttonState(.combinedSessionState, button: .left) { pressed.insert(0) }
+        if CGEventSource.buttonState(.combinedSessionState, button: .right) { pressed.insert(1) }
+        pointerState.reconcile(pressed: pressed)
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
@@ -149,6 +178,7 @@ public final class SenderController {
 
     public func stop() {
         activeClipboardGeneration = nil
+        stopPointer()
         if mode == .remote { client?.send(.releaseAll) }
         client?.close()
         if let eventTap { CFMachPortInvalidate(eventTap) }
@@ -191,6 +221,7 @@ public final class SenderController {
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         guard type == .keyDown || type == .keyUp || type == .flagsChanged else {
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                stopPointer()
                 state.connectionLost()
                 client?.close()
                 layoutSyncEnabled = false
@@ -202,7 +233,7 @@ public final class SenderController {
                 if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
                 updateMode()
             }
-            return Unmanaged.passUnretained(event)
+            return handlePointer(type: type, event: event)
         }
 
         let captured = CapturedKeyEvent(
@@ -222,12 +253,15 @@ public final class SenderController {
             case .passThrough: break
             case let .suppress(packet):
                 sendCurrentLayoutIfNeeded()
-                client?.send(packet)
+                for orderedPacket in pointerBuffer.drain(before: packet) {
+                    client?.send(orderedPacket)
+                }
                 suppress = true
             case .beginConnection:
                 guard let settings else { break }
                 client?.connect(host: settings.host, port: settings.port)
             case .releaseAndDisconnect:
+                stopPointer()
                 client?.send(.releaseAll)
                 client?.close()
             }
@@ -241,6 +275,9 @@ public final class SenderController {
         clipboardSyncEnabled = capabilities.clipboardSynchronization
         resetLayoutSynchronization()
         state.connectionReady()
+        if settings?.forwardPointer == true {
+            if capabilities.pointer { startPointer() } else { pointerUnavailable?() }
+        }
         sendCurrentLayoutIfNeeded()
         if settings?.syncClipboardFromMac == true, clipboardSyncEnabled {
             startClipboardMonitoring()
@@ -252,6 +289,7 @@ public final class SenderController {
     }
 
     private func connectionLost() {
+        stopPointer()
         activeClipboardGeneration = nil
         let wasConnectingOrRemote = state.mode != .local
         state.connectionLost()
@@ -261,6 +299,124 @@ public final class SenderController {
         stopClipboardMonitoring()
         updateMode()
         if wasConnectingOrRemote { connectionFailed?() }
+    }
+
+    private func startPointer() {
+        guard state.mode == .remote, !pointerActive else { return }
+        pointerActivationGeneration &+= 1
+        let generation = pointerActivationGeneration
+        pointerPreviousApp = NSWorkspace.shared.frontmostApplication
+        pointerFocusObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.pointerActivationGeneration == generation,
+                  self.state.mode == .remote else { return }
+            if NSRunningApplication.current.isActive {
+                if !self.pointerActive { self.activatePointer() }
+            } else if self.pointerActive {
+                // Disassociation no longer has its documented foreground guarantee.
+                self.client?.close()
+                self.connectionLost()
+                self.pointerUnavailable?()
+            }
+        }
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        // Cursor disassociation is documented only for the foreground app.
+        // Activation can complete before its workspace notification arrives.
+        if pointerActivationGeneration == generation, !pointerActive,
+           NSRunningApplication.current.isActive { activatePointer() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pointerActivationTimeout) { [weak self] in
+            guard let self, self.pointerActivationGeneration == generation,
+                  self.state.mode == .remote, !self.pointerActive else { return }
+            self.stopPointer()
+            self.pointerUnavailable?()
+        }
+    }
+
+    private func activatePointer() {
+        guard CGAssociateMouseAndMouseCursorPosition(boolean_t(0)) == .success else {
+            stopPointer()
+            pointerUnavailable?()
+            return
+        }
+        pointerState.start()
+        pointerActive = true
+        pointerTimer = Timer.scheduledTimer(withTimeInterval: Self.pointerBatchInterval, repeats: true) { [weak self] _ in
+            guard let self, let packet = self.pointerBuffer.drainForTick() else { return }
+            self.client?.send(packet)
+        }
+        if let pointerTimer { RunLoop.main.add(pointerTimer, forMode: .common) }
+    }
+
+    private func stopPointer() {
+        pointerActivationGeneration &+= 1
+        if pointerActive {
+            flushPointer()
+            _ = pointerState.stop()
+            CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
+        }
+        pointerTimer?.invalidate()
+        pointerTimer = nil
+        pointerActive = false
+        pointerBuffer = PointerEventBuffer()
+        scrollRemainder = ScrollDeltaRemainder()
+        if let pointerFocusObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(pointerFocusObserver)
+            self.pointerFocusObserver = nil
+        }
+        if NSRunningApplication.current.isActive, let previous = pointerPreviousApp,
+           previous.processIdentifier != NSRunningApplication.current.processIdentifier {
+            previous.activate(options: [.activateIgnoringOtherApps])
+        }
+        pointerPreviousApp = nil
+    }
+
+    private func flushPointer() {
+        if let packet = pointerBuffer.drain() { client?.send(packet) }
+    }
+
+    private func handlePointer(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        let button: UInt8
+        let pressed: Bool
+        switch type {
+        case .leftMouseDown: button = 0; pressed = true
+        case .leftMouseUp: button = 0; pressed = false
+        case .rightMouseDown: button = 1; pressed = true
+        case .rightMouseUp: button = 1; pressed = false
+        case .mouseMoved, .leftMouseDragged, .rightMouseDragged:
+            guard pointerActive else { return Unmanaged.passUnretained(event) }
+            if let previous = pointerBuffer.appendMotion(
+                x: Int(event.getIntegerValueField(.mouseEventDeltaX)),
+                y: Int(event.getIntegerValueField(.mouseEventDeltaY))
+            ) { client?.send(previous) }
+            if let immediate = pointerBuffer.drainIfIdle() { client?.send(immediate) }
+            return nil
+        case .scrollWheel:
+            guard pointerActive else { return Unmanaged.passUnretained(event) }
+            let x: Int, y: Int
+            if event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0 {
+                (x, y) = scrollRemainder.append(
+                    x: event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2),
+                    y: event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1)
+                )
+            } else {
+                x = Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis2))
+                y = Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis1))
+            }
+            if let previous = pointerBuffer.appendScroll(x: x, y: y) { client?.send(previous) }
+            if let immediate = pointerBuffer.drainIfIdle() { client?.send(immediate) }
+            // Scrolling is also a Mac gesture; leave its local delivery intact.
+            return Unmanaged.passUnretained(event)
+        default: return Unmanaged.passUnretained(event)
+        }
+        switch pointerState.handle(button: button, pressed: pressed) {
+        case .pass: return Unmanaged.passUnretained(event)
+        case .suppress: return nil
+        case let .send(button, pressed):
+            flushPointer()
+            client?.send(.pointerButton(button: button, pressed: pressed))
+            return nil
+        }
     }
 
     private func updateMode() {
@@ -389,6 +545,7 @@ public final class SenderController {
 struct ReceiverCapabilities: Equatable {
     let layoutSynchronization: Bool
     let clipboardSynchronization: Bool
+    var pointer: Bool = false
 }
 
 public enum ClipboardSendResult: Equatable, Sendable {
@@ -620,6 +777,10 @@ final class ClipboardCapabilityState {
 
 private final class SenderClient {
     private static let maximumReceiveLength = SessionFramer.maximumFrameSize + 4
+    // Keep only a small number of frames inside Network.framework so unsent
+    // motion remains coalescible. Other input stays ordered in a bounded queue.
+    private static let maximumInFlightFrames = 8
+    private static let maximumQueuedPackets = 256
 
     private struct Endpoint {
         let host: String
@@ -627,12 +788,17 @@ private final class SenderClient {
     }
 
     private let queue = DispatchQueue(label: "MacDeckInputBridge.transport")
+    private let outbox = SenderOutbox(capacity: SenderClient.maximumQueuedPackets)
     private let pairing: PairingSecret
     private let retryPolicy: ConnectionRetryPolicy
+    private let requestPointer: Bool
+    private var attemptExtended = false
+    private var extendedFallbackUsed = false
     private var connection: NWConnection?
     private var decoder = FrameDecoder()
     private var session: SessionFramer?
     private var isReady = false
+    private var pendingFrames = 0
     private var nextGeneration: UInt64 = 0
     private var activeGeneration: UInt64?
     private var nextPlan: UInt64 = 0
@@ -652,9 +818,10 @@ private final class SenderClient {
         queue.asyncAfter(deadline: .now() + delay, execute: action)
     }
 
-    init(pairingSecret: String, retryPolicy: ConnectionRetryPolicy = .deckReceiverStartup) throws {
+    init(pairingSecret: String, retryPolicy: ConnectionRetryPolicy = .deckReceiverStartup, requestPointer: Bool = false) throws {
         pairing = try PairingSecret(base64: pairingSecret)
         self.retryPolicy = retryPolicy
+        self.requestPointer = requestPointer
     }
 
     func connect(host: String, port: UInt16) {
@@ -662,7 +829,13 @@ private final class SenderClient {
     }
 
     func send(_ packet: BridgePacket) {
-        queue.async { [weak self] in self?.sendApplicationPacket(packet) }
+        switch outbox.enqueue(packet) {
+        case .inactive, .queued: break
+        case let .wake(generation):
+            queue.async { [weak self] in self?.drainOutbox(generation: generation) }
+        case let .overflow(generation):
+            queue.async { [weak self] in self?.failActiveConnection(generation: generation) }
+        }
     }
 
     func requestDeckClipboardCapability() {
@@ -671,7 +844,7 @@ private final class SenderClient {
             self.clipboardCapability.request { [weak self] in
                 self?.onDeckClipboardCapability?(false)
             }
-            self.sendApplicationPacket(.ping)
+            self.send(.ping)
         }
     }
 
@@ -686,6 +859,7 @@ private final class SenderClient {
         activePlan = plan
         endpoint = Endpoint(host: host, port: port)
         attempt = 0
+        extendedFallbackUsed = false
         startNextAttempt(plan: plan)
     }
 
@@ -693,6 +867,7 @@ private final class SenderClient {
         guard activePlan == plan, let endpoint else { return }
         invalidateActiveConnection()
         attempt += 1
+        attemptExtended = requestPointer && !extendedFallbackUsed
         nextGeneration &+= 1
         let generation = nextGeneration
         activeGeneration = generation
@@ -702,10 +877,14 @@ private final class SenderClient {
         incomingClipboard = nil
         deckClipboardAllowed = false
 
+        let parameters = NWParameters.tcp
+        if let tcp = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
+            tcp.noDelay = true
+        }
         let connection = NWConnection(
             host: NWEndpoint.Host(endpoint.host),
             port: NWEndpoint.Port(rawValue: endpoint.port)!,
-            using: .tcp
+            using: parameters
         )
         self.connection = connection
         connection.stateUpdateHandler = { [weak self] state in
@@ -765,7 +944,7 @@ private final class SenderClient {
         guard var session else {
             let hello = try ServerHello(encoded: frame)
             self.session = try SessionFramer(pairing: pairing, challenge: hello.challenge)
-            try sendPacket(.clientReady, generation: generation)
+            try sendPacket(attemptExtended ? .clientReadyWithPointer : .clientReady, generation: generation)
             return
         }
 
@@ -796,6 +975,8 @@ private final class SenderClient {
         }
         let capabilities: ReceiverCapabilities
         switch packet {
+        case let .serverReadyWithCapabilities(flags) where attemptExtended:
+            capabilities = ReceiverCapabilities(layoutSynchronization: flags & 1 != 0, clipboardSynchronization: flags & 2 != 0, pointer: flags & 4 != 0)
         case .serverReady:
             capabilities = ReceiverCapabilities(layoutSynchronization: false, clipboardSynchronization: false)
         case .serverReadyWithLayoutSync:
@@ -808,37 +989,57 @@ private final class SenderClient {
             throw ProtocolError.invalidFrame
         }
         isReady = true
+        outbox.activate(generation: generation)
         handshakeTimeoutWorkItem?.cancel()
         handshakeTimeoutWorkItem = nil
         onReady?(generation, capabilities)
     }
 
-    private func sendApplicationPacket(_ packet: BridgePacket) {
-        guard isReady, let generation = activeGeneration else { return }
-        do {
-            try sendPacket(packet, generation: generation)
-        } catch {
-            failActiveConnection(generation: generation)
+    private func drainOutbox(generation: UInt64) {
+        guard isReady, activeGeneration == generation else { return }
+        while pendingFrames < Self.maximumInFlightFrames,
+              let packet = outbox.take(generation: generation) {
+            do {
+                try sendPacket(packet, generation: generation)
+            } catch {
+                failActiveConnection(generation: generation)
+                return
+            }
         }
     }
 
     private func sendPacket(_ packet: BridgePacket, generation: UInt64) throws {
         guard activeGeneration == generation, let connection, var session else { throw ProtocolError.invalidFrame }
+        guard pendingFrames < Self.maximumInFlightFrames else { throw ProtocolError.invalidFrame }
         let frame = try session.seal(packet)
+        pendingFrames += 1
         self.session = session
         connection.send(content: frame, completion: .contentProcessed { [weak self] error in
-            if error != nil { self?.failActiveConnection(generation: generation) }
+            guard let self, self.activeGeneration == generation else { return }
+            self.pendingFrames = max(0, self.pendingFrames - 1)
+            if error != nil {
+                self.failActiveConnection(generation: generation)
+            } else {
+                self.drainOutbox(generation: generation)
+            }
         })
     }
 
     private func failActiveConnection(generation: UInt64) {
         guard activeGeneration == generation else { return }
         let wasReady = isReady
+        let tryLegacy = !wasReady && attemptExtended && session != nil && !extendedFallbackUsed
         guard let plan = activePlan else {
             invalidateActiveConnection()
             return
         }
         invalidateActiveConnection()
+        if tryLegacy {
+            extendedFallbackUsed = true
+            attempt -= 1
+            scheduleRetry(plan: plan)
+            return
+        }
 
         if !wasReady, retryPolicy.shouldRetry(afterFailedAttempt: attempt) {
             scheduleRetry(plan: plan)
@@ -894,6 +1095,7 @@ private final class SenderClient {
     }
 
     private func invalidateActiveConnection() {
+        outbox.deactivate()
         clipboardCapability.invalidate()
         handshakeTimeoutWorkItem?.cancel()
         handshakeTimeoutWorkItem = nil
@@ -903,6 +1105,7 @@ private final class SenderClient {
         decoder = FrameDecoder()
         session = nil
         isReady = false
+        pendingFrames = 0
         connection?.cancel()
     }
 }

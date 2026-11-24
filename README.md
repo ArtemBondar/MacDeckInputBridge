@@ -115,6 +115,23 @@ MacDeck sends a layout update as soon as the secure connection is ready and on
 each Mac input-source change. See [Keyboard layout synchronization](docs/KEYBOARD_LAYOUT_SYNC.md)
 for matching rules and the custom-layout fallback.
 
+## Pointer forwarding (experimental)
+
+On the Mac, enable **Forward Mac pointer to Steam Deck** in MacDeck Settings.
+After reconnecting, the keyboard shortcut switches the pointer together with
+the keyboard. The option is off by default. If the Deck cannot provide a
+virtual mouse, or it runs an older version, keyboard forwarding remains
+available and the Mac reports that pointer forwarding is unavailable.
+
+Pointer forwarding is intended for Desktop Mode. Movement, clicks, dragging,
+scroll direction and sensitivity still require verification on a MacBook and
+Steam Deck; pinch and multi-finger gestures are not included.
+MacDeck needs to become the active Mac application while forwarding the pointer.
+If another Mac application becomes active, forwarding stops and input returns
+to the Mac. MacDeck does not intentionally block trackpad gestures on the Mac.
+Two-finger scroll events are also sent to the Deck; pinch and system gestures
+are not forwarded. Verify gesture behavior on your devices.
+
 ## Clipboard sync (optional)
 
 MacDeck can share new plain-text clipboard changes while the encrypted keyboard

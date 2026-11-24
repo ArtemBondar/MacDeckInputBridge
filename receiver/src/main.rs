@@ -23,6 +23,7 @@ use std::{
 };
 use wl_clipboard_rs::copy::{MimeType, Options as ClipboardOptions, Source as ClipboardSource};
 mod clipboard_watch;
+mod pointer;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -137,6 +138,35 @@ enum Command {
         #[arg(long = "layout-mapping", action = ArgAction::Append)]
         layout_mappings: Vec<String>,
     },
+}
+
+trait PointerSink {
+    fn motion(&mut self, dx: i16, dy: i16) -> io::Result<()>;
+    fn button(&mut self, button: u8, pressed: bool) -> io::Result<()>;
+    fn scroll(&mut self, horizontal: i16, vertical: i16) -> io::Result<()>;
+    fn release_all(&mut self) -> io::Result<()>;
+}
+struct PointerGuard<'a>(Option<&'a mut dyn PointerSink>);
+impl Drop for PointerGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(pointer) = self.0.as_deref_mut() {
+            let _ = pointer.release_all();
+        }
+    }
+}
+impl PointerSink for pointer::PointerDevice {
+    fn motion(&mut self, x: i16, y: i16) -> io::Result<()> {
+        self.motion(x, y)
+    }
+    fn button(&mut self, button: u8, pressed: bool) -> io::Result<()> {
+        self.button(button, pressed)
+    }
+    fn scroll(&mut self, x: i16, y: i16) -> io::Result<()> {
+        self.scroll(x, y)
+    }
+    fn release_all(&mut self) -> io::Result<()> {
+        self.release_all()
+    }
 }
 
 trait KeySink {
@@ -308,7 +338,7 @@ fn handle_client(
     // A peer must prove possession of the pairing secret within a bounded time
     // before it can occupy the receiver. The challenge derives a fresh session
     // key, so an authenticated frame captured on an old connection cannot replay.
-    let session = receive_client_ready(stream, pairing_secret)?;
+    let (session, _) = receive_client_ready(stream, pairing_secret)?;
     session.write_packet(stream, 0, &Packet::ServerReady)?;
     let shutdown = AtomicBool::new(false);
     handle_authenticated_client(
@@ -319,6 +349,7 @@ fn handle_client(
         None,
         None,
         (false, &AtomicBool::new(false)),
+        None,
     )
 }
 
@@ -360,7 +391,7 @@ impl Write for HandshakeStream<'_> {
 fn receive_client_ready(
     stream: &mut TcpStream,
     pairing_secret: &PairingSecret,
-) -> Result<SessionFramer, BridgeError> {
+) -> Result<(SessionFramer, bool), BridgeError> {
     receive_client_ready_before(stream, pairing_secret, HANDSHAKE_TIMEOUT)
 }
 
@@ -368,7 +399,7 @@ fn receive_client_ready_before(
     stream: &mut TcpStream,
     pairing_secret: &PairingSecret,
     timeout: Duration,
-) -> Result<SessionFramer, BridgeError> {
+) -> Result<(SessionFramer, bool), BridgeError> {
     let mut handshake = HandshakeStream {
         stream,
         deadline: Instant::now() + timeout,
@@ -378,10 +409,14 @@ fn receive_client_ready_before(
     let session = SessionFramer::new(derive_session_secret(pairing_secret, &challenge));
     let (sequence, packet) = session.read_packet(&mut handshake)?;
     handshake.remaining()?;
-    if sequence != 0 || packet != Packet::ClientReady {
+    if sequence != 0 {
         return Err(BridgeError::Handshake);
     }
-    Ok(session)
+    match packet {
+        Packet::ClientReady => Ok((session, false)),
+        Packet::ClientReadyWithPointer => Ok((session, true)),
+        _ => Err(BridgeError::Handshake),
+    }
 }
 
 // A pending slot protects only the unauthenticated phase, not the lifetime of
@@ -390,7 +425,7 @@ fn complete_pending_handshake(
     stream: &mut TcpStream,
     pairing_secret: &PairingSecret,
     pending_handshakes: &AtomicUsize,
-) -> Result<SessionFramer, BridgeError> {
+) -> Result<(SessionFramer, bool), BridgeError> {
     let result = receive_client_ready(stream, pairing_secret);
     pending_handshakes.fetch_sub(1, Ordering::AcqRel);
     result
@@ -451,6 +486,8 @@ impl Read for SessionFrameReader<'_> {
     }
 }
 
+// Session dependencies have independent lifetimes and optional capabilities.
+#[allow(clippy::too_many_arguments)]
 fn handle_authenticated_client(
     stream: &mut TcpStream,
     session: &SessionFramer,
@@ -459,7 +496,9 @@ fn handle_authenticated_client(
     layout_switcher: Option<&PlasmaLayoutSwitcher>,
     clipboard_sink: Option<&mut dyn ClipboardSink>,
     reverse_clipboard: (bool, &AtomicBool),
+    pointer: Option<&mut dyn PointerSink>,
 ) -> Result<(), BridgeError> {
+    let mut pointer = PointerGuard(pointer);
     let (allow_clipboard_to_mac, manual_clipboard_request) = reverse_clipboard;
     // A stalled peer must not indefinitely hold virtual keys while a clipboard
     // acknowledgement or transfer is being sent.
@@ -668,7 +707,26 @@ fn handle_authenticated_client(
                     .checked_add(1)
                     .ok_or(BridgeError::Handshake)?;
             }
+            Packet::PointerMotion { dx, dy } if pointer.0.is_some() => {
+                pointer.0.as_deref_mut().unwrap().motion(dx, dy)?
+            }
+            Packet::PointerButton { button, pressed } if pointer.0.is_some() => {
+                pointer.0.as_deref_mut().unwrap().button(button, pressed)?
+            }
+            Packet::PointerScroll {
+                horizontal,
+                vertical,
+            } if pointer.0.is_some() => pointer
+                .0
+                .as_deref_mut()
+                .unwrap()
+                .scroll(horizontal, vertical)?,
             Packet::Key { .. }
+            | Packet::PointerMotion { .. }
+            | Packet::PointerButton { .. }
+            | Packet::PointerScroll { .. }
+            | Packet::ClientReadyWithPointer
+            | Packet::ServerReadyWithCapabilities(_)
             | Packet::ClientReady
             | Packet::ServerReady
             | Packet::ServerReadyWithLayoutSync
@@ -692,7 +750,12 @@ fn handle_authenticated_client(
                     eprintln!("Mac could not accept the clipboard.")
                 }
             },
-            Packet::ReleaseAll => sink.release_all()?,
+            Packet::ReleaseAll => {
+                sink.release_all()?;
+                if let Some(pointer) = pointer.0.as_deref_mut() {
+                    pointer.release_all()?;
+                }
+            }
             Packet::Ping => {
                 let allowed = allow_clipboard_to_mac && WaylandClipboardSink::new().is_ok();
                 if allowed && watcher.is_none() {
@@ -1570,20 +1633,36 @@ fn serve<S: KeySink + Send + 'static>(
                         &pairing_secret,
                         &pending_handshakes,
                     );
-                    if let Ok(session) = session {
+                    if let Ok((session, pointer_requested)) = session {
                         // A receiver has exactly one uinput keyboard. Do not confirm
                         // REMOTE for a second peer while a first peer owns it.
                         if active_session
                             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                             .is_ok()
                         {
-                            let ready_packet =
+                            let gaming = gaming_session(
+                                env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+                                env::var("XDG_SESSION_DESKTOP").ok().as_deref(),
+                            );
+                            let mut pointer = if pointer_requested && !gaming {
+                                pointer::PointerDevice::open().ok()
+                            } else {
+                                None
+                            };
+                            let ready_packet = if pointer_requested {
+                                Packet::ServerReadyWithCapabilities(
+                                    u8::from(layout_switcher.is_some())
+                                        | (u8::from(clipboard_available) << 1)
+                                        | (u8::from(pointer.is_some()) << 2),
+                                )
+                            } else {
                                 match (layout_switcher.is_some(), clipboard_available) {
                                     (false, false) => Packet::ServerReady,
                                     (true, false) => Packet::ServerReadyWithLayoutSync,
                                     (false, true) => Packet::ServerReadyWithClipboardSync,
                                     (true, true) => Packet::ServerReadyWithLayoutAndClipboardSync,
-                                };
+                                }
+                            };
                             let mut clipboard_sink = if clipboard_available {
                                 WaylandClipboardSink::new().ok()
                             } else {
@@ -1604,6 +1683,7 @@ fn serve<S: KeySink + Send + 'static>(
                                                     .as_mut()
                                                     .map(|sink| sink as &mut dyn ClipboardSink),
                                                 (sync_clipboard_to_mac, &manual_clipboard_request),
+                                                pointer.as_mut().map(|p| p as &mut dyn PointerSink),
                                             )
                                         },
                                     )
@@ -1702,6 +1782,113 @@ mod receiver_tests {
     use super::*;
     use std::collections::BTreeSet;
     #[derive(Default)]
+    struct TestPointer {
+        events: Vec<String>,
+        held: BTreeSet<u8>,
+    }
+    impl PointerSink for TestPointer {
+        fn motion(&mut self, x: i16, y: i16) -> io::Result<()> {
+            self.events.push(format!("move:{x},{y}"));
+            Ok(())
+        }
+        fn button(&mut self, button: u8, pressed: bool) -> io::Result<()> {
+            self.events.push(format!("button:{button},{pressed}"));
+            if pressed {
+                self.held.insert(button);
+            } else {
+                self.held.remove(&button);
+            }
+            Ok(())
+        }
+        fn scroll(&mut self, x: i16, y: i16) -> io::Result<()> {
+            self.events.push(format!("scroll:{x},{y}"));
+            Ok(())
+        }
+        fn release_all(&mut self) -> io::Result<()> {
+            self.events.push("release".into());
+            self.held.clear();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn pointer_packets_require_capability_and_release_with_keyboard() {
+        let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+        for (enabled, explicit_release) in [(false, false), (true, true), (true, false)] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server_pairing = pairing.clone();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let session = SessionFramer::new(server_pairing);
+                let mut keys = TestSink::default();
+                let mut pointer = TestPointer::default();
+                let shutdown = AtomicBool::new(false);
+                let p = if enabled {
+                    Some(&mut pointer as &mut dyn PointerSink)
+                } else {
+                    None
+                };
+                let result = handle_authenticated_client(
+                    &mut stream,
+                    &session,
+                    &mut keys,
+                    &shutdown,
+                    None,
+                    None,
+                    (false, &AtomicBool::new(false)),
+                    p,
+                );
+                (result, pointer)
+            });
+            let mut client = TcpStream::connect(address).unwrap();
+            let session = SessionFramer::new(pairing.clone());
+            session
+                .write_packet(
+                    &mut client,
+                    1,
+                    &Packet::PointerButton {
+                        button: 0,
+                        pressed: true,
+                    },
+                )
+                .unwrap();
+            if enabled {
+                session
+                    .write_packet(&mut client, 2, &Packet::PointerMotion { dx: -3, dy: 4 })
+                    .unwrap();
+                session
+                    .write_packet(
+                        &mut client,
+                        3,
+                        &Packet::PointerScroll {
+                            horizontal: 1,
+                            vertical: -1,
+                        },
+                    )
+                    .unwrap();
+                if explicit_release {
+                    session
+                        .write_packet(&mut client, 4, &Packet::ReleaseAll)
+                        .unwrap();
+                }
+            }
+            drop(client);
+            let (result, pointer) = server.join().unwrap();
+            assert!(result.is_err());
+            if enabled {
+                let mut expected = vec!["button:0,true", "move:-3,4", "scroll:1,-1", "release"];
+                if explicit_release {
+                    expected.push("release");
+                }
+                assert_eq!(pointer.events, expected);
+                assert!(pointer.held.is_empty());
+            } else {
+                assert!(pointer.events.is_empty());
+            }
+        }
+    }
+    #[derive(Default)]
     struct TestSink {
         held: BTreeSet<u16>,
     }
@@ -1722,6 +1909,30 @@ mod receiver_tests {
 
     struct TestClipboardSink {
         result: Result<(), String>,
+    }
+
+    #[test]
+    fn handshake_distinguishes_legacy_and_pointer_requests() {
+        let pairing = PairingSecret::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+        for (request, expected) in [
+            (Packet::ClientReady, false),
+            (Packet::ClientReadyWithPointer, true),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server_pairing = pairing.clone();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let (_, pointer_requested) =
+                    receive_client_ready(&mut stream, &server_pairing).unwrap();
+                pointer_requested
+            });
+            let mut client = TcpStream::connect(address).unwrap();
+            let challenge = mac_deck_receiver::read_server_hello(&mut client).unwrap();
+            let session = SessionFramer::new(derive_session_secret(&pairing, &challenge));
+            session.write_packet(&mut client, 0, &request).unwrap();
+            assert_eq!(server.join().unwrap(), expected);
+        }
     }
 
     impl ClipboardSink for TestClipboardSink {
@@ -1926,6 +2137,7 @@ mod receiver_tests {
                 None,
                 None,
                 (false, &AtomicBool::new(false)),
+                None,
             );
             assert!(
                 matches!(result, Err(BridgeError::Io(error)) if error.kind() == io::ErrorKind::TimedOut)
@@ -2116,7 +2328,7 @@ mod receiver_tests {
         let server_pairing = pairing.clone();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let session = receive_client_ready(&mut stream, &server_pairing).unwrap();
+            let (session, _) = receive_client_ready(&mut stream, &server_pairing).unwrap();
             session
                 .write_packet(&mut stream, 0, &Packet::ServerReadyWithClipboardSync)
                 .unwrap();
@@ -2131,6 +2343,7 @@ mod receiver_tests {
                 None,
                 Some(&mut clipboard),
                 (false, &AtomicBool::new(false)),
+                None,
             );
             (result, keys)
         });

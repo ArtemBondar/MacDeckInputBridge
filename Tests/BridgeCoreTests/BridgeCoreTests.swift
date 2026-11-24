@@ -174,6 +174,163 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(try receiver.open(combined: frames[1]), .key(code: 30, value: 1))
     }
 
+    func testPointerButtonOwnershipAcrossToggle() {
+        var state = PointerButtonState()
+        XCTAssertEqual(state.handle(button: 0, pressed: true), .pass)
+        state.start()
+        XCTAssertEqual(state.handle(button: 0, pressed: false), .pass)
+        XCTAssertEqual(state.handle(button: 1, pressed: true), .send(button: 1, pressed: true))
+        XCTAssertEqual(state.stop(), [1])
+        state.start()
+        XCTAssertEqual(state.handle(button: 1, pressed: false), .suppress)
+        XCTAssertEqual(state.stop(), [])
+        XCTAssertEqual(state.handle(button: 1, pressed: true), .pass)
+        XCTAssertEqual(state.handle(button: 1, pressed: false), .pass)
+    }
+
+    func testPointerButtonStateReconcilesEventsMissedWhileTapStopped() {
+        var state = PointerButtonState()
+        state.start()
+        XCTAssertEqual(state.handle(button: 0, pressed: true), .send(button: 0, pressed: true))
+        XCTAssertEqual(state.stop(), [0])
+        // The physical release happened while the event tap was stopped.
+        state.reconcile(pressed: [])
+        state.start()
+        XCTAssertEqual(state.handle(button: 0, pressed: true), .send(button: 0, pressed: true))
+        XCTAssertEqual(state.handle(button: 0, pressed: false), .send(button: 0, pressed: false))
+
+        _ = state.stop()
+        state.reconcile(pressed: [1])
+        state.start()
+        XCTAssertEqual(state.handle(button: 1, pressed: false), .pass)
+        XCTAssertEqual(state.handle(button: 1, pressed: true), .send(button: 1, pressed: true))
+    }
+
+    func testPointerBufferPreservesMotionAndScrollOrder() {
+        var buffer = PointerEventBuffer()
+        XCTAssertNil(buffer.appendScroll(x: 0, y: 2))
+        XCTAssertEqual(buffer.appendMotion(x: 3, y: 4), .pointerScroll(horizontal: 0, vertical: 2))
+        XCTAssertNil(buffer.appendMotion(x: -1, y: 1))
+        XCTAssertEqual(buffer.appendScroll(x: 1, y: 0), .pointerMotion(dx: 2, dy: 5))
+        XCTAssertEqual(buffer.drain(), .pointerScroll(horizontal: 1, vertical: 0))
+        XCTAssertNil(buffer.drain())
+    }
+
+    func testBufferedScrollPrecedesForwardedModifierRelease() {
+        var buffer = PointerEventBuffer()
+        XCTAssertNil(buffer.appendScroll(x: 0, y: 2))
+        let release = BridgePacket.key(code: 29, value: 0)
+        XCTAssertEqual(buffer.drain(before: release), [
+            .pointerScroll(horizontal: 0, vertical: 2), release
+        ])
+        XCTAssertEqual(buffer.drain(before: release), [release])
+    }
+
+    func testPointerBufferSendsFirstEventImmediatelyAndCoalescesBurst() {
+        var buffer = PointerEventBuffer()
+        XCTAssertNil(buffer.appendMotion(x: 3, y: 2))
+        XCTAssertEqual(buffer.drainIfIdle(), .pointerMotion(dx: 3, dy: 2))
+        XCTAssertNil(buffer.appendMotion(x: 4, y: 1))
+        XCTAssertNil(buffer.drainIfIdle())
+        XCTAssertNil(buffer.appendMotion(x: 5, y: -2))
+        XCTAssertEqual(buffer.drainForTick(), .pointerMotion(dx: 9, dy: -1))
+        XCTAssertNil(buffer.drainForTick())
+        XCTAssertNil(buffer.appendMotion(x: 7, y: 0))
+        XCTAssertEqual(buffer.drainIfIdle(), .pointerMotion(dx: 7, dy: 0))
+    }
+
+    func testPointerBufferDoesNotDiscardAccumulatedFastMotion() {
+        var buffer = PointerEventBuffer()
+        XCTAssertNil(buffer.appendMotion(x: 30_000, y: -30_000))
+        XCTAssertEqual(buffer.appendMotion(x: 10_000, y: -10_000),
+                       .pointerMotion(dx: 30_000, dy: -30_000))
+        XCTAssertEqual(buffer.drain(), .pointerMotion(dx: 10_000, dy: -10_000))
+    }
+
+    func testCongestedOutboxCoalescesMotionWithoutCreatingMoreWakeups() {
+        let outbox = SenderOutbox(capacity: 4)
+        outbox.activate(generation: 42)
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: 1, dy: -1)), .wake(42))
+        for _ in 1..<10_000 {
+            XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: 1, dy: -1)), .queued)
+        }
+        XCTAssertEqual(outbox.take(generation: 42), .pointerMotion(dx: 10_000, dy: -10_000))
+        XCTAssertNil(outbox.take(generation: 42))
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: 1, dy: 0)), .wake(42))
+    }
+
+    func testCongestedOutboxPreservesBarriersReversalsAndLargeDeltas() {
+        let outbox = SenderOutbox(capacity: 8)
+        outbox.activate(generation: 7)
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: 30_000, dy: 0)), .wake(7))
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: 5_000, dy: 0)), .queued)
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: -3, dy: 0)), .queued)
+        XCTAssertEqual(outbox.enqueue(.pointerButton(button: 0, pressed: true)), .queued)
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: -4, dy: 0)), .queued)
+        XCTAssertEqual(outbox.enqueue(.key(code: 29, value: 0)), .queued)
+        XCTAssertEqual(outbox.enqueue(.pointerScroll(horizontal: 0, vertical: 1)), .queued)
+        let expected: [BridgePacket] = [
+            .pointerMotion(dx: 30_000, dy: 0), .pointerMotion(dx: 5_000, dy: 0),
+            .pointerMotion(dx: -3, dy: 0), .pointerButton(button: 0, pressed: true),
+            .pointerMotion(dx: -4, dy: 0), .key(code: 29, value: 0),
+            .pointerScroll(horizontal: 0, vertical: 1)
+        ]
+        XCTAssertEqual(expected.compactMap { _ in outbox.take(generation: 7) }, expected)
+        XCTAssertNil(outbox.take(generation: 7))
+    }
+
+    func testCongestedOutboxAcceptsConcurrentMotionWithoutLosingDeltas() {
+        let outbox = SenderOutbox(capacity: 4)
+        outbox.activate(generation: 3)
+        DispatchQueue.concurrentPerform(iterations: 10_000) { _ in
+            _ = outbox.enqueue(.pointerMotion(dx: 1, dy: 1))
+        }
+        XCTAssertEqual(outbox.take(generation: 3), .pointerMotion(dx: 10_000, dy: 10_000))
+        XCTAssertNil(outbox.take(generation: 3))
+    }
+
+    func testCongestedOutboxFailsClosedAndDiscardsOldGeneration() {
+        let outbox = SenderOutbox(capacity: 2)
+        outbox.activate(generation: 1)
+        XCTAssertEqual(outbox.enqueue(.key(code: 30, value: 1)), .wake(1))
+        XCTAssertEqual(outbox.enqueue(.pointerButton(button: 0, pressed: true)), .queued)
+        XCTAssertEqual(outbox.enqueue(.key(code: 30, value: 0)), .overflow(1))
+        XCTAssertEqual(outbox.enqueue(.pointerButton(button: 0, pressed: false)), .inactive)
+        XCTAssertNil(outbox.take(generation: 1))
+        outbox.activate(generation: 2)
+        XCTAssertEqual(outbox.enqueue(.key(code: 30, value: 0)), .wake(2))
+        XCTAssertNil(outbox.take(generation: 1))
+        XCTAssertEqual(outbox.take(generation: 2), .key(code: 30, value: 0))
+    }
+
+    func testPreciseScrollAccumulatesFractionalSteps() {
+        var scroll = ScrollDeltaRemainder()
+        let first = scroll.append(x: 0.4, y: -0.4)
+        XCTAssertEqual(first.0, 0); XCTAssertEqual(first.1, 0)
+        let second = scroll.append(x: 0.7, y: -0.7)
+        XCTAssertEqual(second.0, 1); XCTAssertEqual(second.1, -1)
+        let third = scroll.append(x: .nan, y: .infinity)
+        XCTAssertEqual(third.0, 0); XCTAssertEqual(third.1, 0)
+    }
+
+    func testPointerPacketWireFixtures() {
+        let fixtures: [(BridgePacket, [UInt8])] = [
+            (.clientReadyWithPointer, [18]),
+            (.serverReadyWithCapabilities(7), [19, 7]),
+            (.pointerMotion(dx: -32768, dy: 32767), [15, 128, 0, 127, 255]),
+            (.pointerScroll(horizontal: -1, vertical: 256), [17, 255, 255, 1, 0]),
+            (.pointerButton(button: 1, pressed: true), [16, 1, 1]),
+            (.pointerButton(button: 0, pressed: false), [16, 0, 0])
+        ]
+        for (packet, bytes) in fixtures {
+            XCTAssertEqual(packet.encoded(), Data(bytes))
+            XCTAssertEqual(BridgePacket(encoded: Data(bytes)), packet)
+        }
+        for bytes: [UInt8] in [[15, 0, 0, 0], [16, 2, 1], [16, 1, 2], [17, 0, 0, 0, 0, 0], [19, 8]] {
+            XCTAssertNil(BridgePacket(encoded: Data(bytes)))
+        }
+    }
+
     func testInvalidPacketsAreRejected() {
         XCTAssertNil(BridgePacket(encoded: Data()))
         XCTAssertNil(BridgePacket(encoded: Data([1, 0, 30, 3])))
@@ -718,9 +875,12 @@ final class BridgeCoreTests: XCTestCase {
         let store = BridgeSettingsStore(defaults: defaults, secretStore: InMemoryPairingSecretStore())
         XCTAssertFalse(store.loadSettings().syncClipboardFromMac)
         XCTAssertFalse(store.loadSettings().syncClipboardFromDeck)
+        XCTAssertFalse(store.loadSettings().forwardPointer)
         try store.saveSettings(BridgeSettings(host: "deck.local", syncClipboardFromMac: true, syncClipboardFromDeck: true))
         XCTAssertTrue(store.loadSettings().syncClipboardFromMac)
         XCTAssertTrue(store.loadSettings().syncClipboardFromDeck)
+        try store.saveSettings(BridgeSettings(host: "deck.local", forwardPointer: true))
+        XCTAssertTrue(store.loadSettings().forwardPointer)
     }
 }
 

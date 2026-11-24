@@ -24,6 +24,13 @@ public enum BridgePacket: Equatable, Sendable {
     /// nonce, and authentication-tag overhead are included.
     public static let maximumClipboardChunkBytes = 3_840
 
+    /// Pointer packets are reserved for a future negotiated session.
+    case pointerMotion(dx: Int16, dy: Int16)
+    case pointerButton(button: UInt8, pressed: Bool)
+    case pointerScroll(horizontal: Int16, vertical: Int16)
+    case clientReadyWithPointer
+    /// Bit 0 is layout sync, bit 1 is clipboard sync, bit 2 is pointer.
+    case serverReadyWithCapabilities(UInt8)
     case key(code: UInt16, value: UInt8)
     case releaseAll
     case ping
@@ -44,6 +51,17 @@ public enum BridgePacket: Equatable, Sendable {
 
     public func encoded() -> Data {
         switch self {
+        case .clientReadyWithPointer: return Data([18])
+        case let .serverReadyWithCapabilities(flags):
+            precondition(flags <= 7)
+            return Data([19, flags])
+        case let .pointerMotion(dx, dy):
+            var result = Data([15]); result.appendInteger(dx); result.appendInteger(dy); return result
+        case let .pointerButton(button, pressed):
+            precondition(button <= 1)
+            return Data([16, button, pressed ? 1 : 0])
+        case let .pointerScroll(horizontal, vertical):
+            var result = Data([17]); result.appendInteger(horizontal); result.appendInteger(vertical); return result
         case let .key(code, value): return Data([1, UInt8(code >> 8), UInt8(code & 0xff), value])
         case .releaseAll: return Data([2])
         case .ping: return Data([3])
@@ -85,7 +103,20 @@ public enum BridgePacket: Equatable, Sendable {
 
     public init?(encoded: Data) {
         let bytes = Array(encoded)
-        if bytes.count == 4, bytes[0] == 1, bytes[3] <= 2 {
+        if bytes == [18] { self = .clientReadyWithPointer
+        } else if bytes.count == 2, bytes[0] == 19, bytes[1] <= 7 {
+            self = .serverReadyWithCapabilities(bytes[1])
+        } else if bytes.count == 5, bytes[0] == 15,
+           let dx = Self.integer(bytes, offset: 1, as: UInt16.self),
+           let dy = Self.integer(bytes, offset: 3, as: UInt16.self) {
+            self = .pointerMotion(dx: Int16(bitPattern: dx), dy: Int16(bitPattern: dy))
+        } else if bytes.count == 3, bytes[0] == 16, bytes[1] <= 1, bytes[2] <= 1 {
+            self = .pointerButton(button: bytes[1], pressed: bytes[2] == 1)
+        } else if bytes.count == 5, bytes[0] == 17,
+                  let horizontal = Self.integer(bytes, offset: 1, as: UInt16.self),
+                  let vertical = Self.integer(bytes, offset: 3, as: UInt16.self) {
+            self = .pointerScroll(horizontal: Int16(bitPattern: horizontal), vertical: Int16(bitPattern: vertical))
+        } else if bytes.count == 4, bytes[0] == 1, bytes[3] <= 2 {
             self = .key(code: UInt16(bytes[1]) << 8 | UInt16(bytes[2]), value: bytes[3])
         } else if bytes == [2] { self = .releaseAll
         } else if bytes == [3] { self = .ping

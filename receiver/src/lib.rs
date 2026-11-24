@@ -71,6 +71,21 @@ impl ClipboardDelivery {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Packet {
+    ClientReadyWithPointer,
+    ServerReadyWithCapabilities(u8),
+    /// Reserved for negotiated pointer sessions.
+    PointerMotion {
+        dx: i16,
+        dy: i16,
+    },
+    PointerButton {
+        button: u8,
+        pressed: bool,
+    },
+    PointerScroll {
+        horizontal: i16,
+        vertical: i16,
+    },
     Key {
         code: u16,
         value: u8,
@@ -128,6 +143,30 @@ pub enum BridgeError {
 impl Packet {
     pub fn encode(&self) -> Vec<u8> {
         match self {
+            Self::ClientReadyWithPointer => vec![18],
+            Self::ServerReadyWithCapabilities(flags) => {
+                assert!(*flags <= 7);
+                vec![19, *flags]
+            }
+            Self::PointerMotion { dx, dy } => {
+                let mut result = vec![15];
+                result.extend(dx.to_be_bytes());
+                result.extend(dy.to_be_bytes());
+                result
+            }
+            Self::PointerButton { button, pressed } => {
+                assert!(*button <= 1);
+                vec![16, *button, u8::from(*pressed)]
+            }
+            Self::PointerScroll {
+                horizontal,
+                vertical,
+            } => {
+                let mut result = vec![17];
+                result.extend(horizontal.to_be_bytes());
+                result.extend(vertical.to_be_bytes());
+                result
+            }
             Self::Key { code, value } => vec![1, (*code >> 8) as u8, *code as u8, *value],
             Self::ReleaseAll => vec![2],
             Self::Ping => vec![3],
@@ -194,6 +233,20 @@ impl Packet {
 
     pub fn decode(bytes: &[u8]) -> Result<Self, BridgeError> {
         match bytes {
+            [18] => Ok(Self::ClientReadyWithPointer),
+            [19, flags @ 0..=7] => Ok(Self::ServerReadyWithCapabilities(*flags)),
+            [15, dxh, dxl, dyh, dyl] => Ok(Self::PointerMotion {
+                dx: i16::from_be_bytes([*dxh, *dxl]),
+                dy: i16::from_be_bytes([*dyh, *dyl]),
+            }),
+            [16, button @ 0..=1, pressed @ 0..=1] => Ok(Self::PointerButton {
+                button: *button,
+                pressed: *pressed == 1,
+            }),
+            [17, hh, hl, vh, vl] => Ok(Self::PointerScroll {
+                horizontal: i16::from_be_bytes([*hh, *hl]),
+                vertical: i16::from_be_bytes([*vh, *vl]),
+            }),
             [1, high, low, value @ 0..=2] => Ok(Self::Key {
                 code: u16::from_be_bytes([*high, *low]),
                 value: *value,
@@ -654,5 +707,54 @@ mod tests {
             session.open(&frame[4..]).unwrap(),
             (41, Packet::Key { code: 30, value: 1 })
         );
+    }
+
+    #[test]
+    fn pointer_packet_wire_fixtures_and_invalid_values() {
+        let fixtures = [
+            (Packet::ClientReadyWithPointer, vec![18]),
+            (Packet::ServerReadyWithCapabilities(7), vec![19, 7]),
+            (
+                Packet::PointerMotion {
+                    dx: i16::MIN,
+                    dy: i16::MAX,
+                },
+                vec![15, 128, 0, 127, 255],
+            ),
+            (
+                Packet::PointerScroll {
+                    horizontal: -1,
+                    vertical: 256,
+                },
+                vec![17, 255, 255, 1, 0],
+            ),
+            (
+                Packet::PointerButton {
+                    button: 1,
+                    pressed: true,
+                },
+                vec![16, 1, 1],
+            ),
+            (
+                Packet::PointerButton {
+                    button: 0,
+                    pressed: false,
+                },
+                vec![16, 0, 0],
+            ),
+        ];
+        for (packet, bytes) in fixtures {
+            assert_eq!(packet.encode(), bytes);
+            assert_eq!(Packet::decode(&bytes).unwrap(), packet);
+        }
+        for bytes in [
+            &[15, 0, 0, 0][..],
+            &[16, 2, 1],
+            &[16, 1, 2],
+            &[17, 0, 0, 0, 0, 0],
+            &[19, 8],
+        ] {
+            assert!(Packet::decode(bytes).is_err());
+        }
     }
 }
