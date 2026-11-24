@@ -247,6 +247,62 @@ final class BridgeCoreTests: XCTestCase {
         XCTAssertEqual(buffer.drain(), .pointerMotion(dx: 10_000, dy: -10_000))
     }
 
+    func testCongestedOutboxCoalescesMotionWithoutCreatingMoreWakeups() {
+        let outbox = SenderOutbox(capacity: 4)
+        outbox.activate(generation: 42)
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: 1, dy: -1)), .wake(42))
+        for _ in 1..<10_000 {
+            XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: 1, dy: -1)), .queued)
+        }
+        XCTAssertEqual(outbox.take(generation: 42), .pointerMotion(dx: 10_000, dy: -10_000))
+        XCTAssertNil(outbox.take(generation: 42))
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: 1, dy: 0)), .wake(42))
+    }
+
+    func testCongestedOutboxPreservesBarriersReversalsAndLargeDeltas() {
+        let outbox = SenderOutbox(capacity: 8)
+        outbox.activate(generation: 7)
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: 30_000, dy: 0)), .wake(7))
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: 5_000, dy: 0)), .queued)
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: -3, dy: 0)), .queued)
+        XCTAssertEqual(outbox.enqueue(.pointerButton(button: 0, pressed: true)), .queued)
+        XCTAssertEqual(outbox.enqueue(.pointerMotion(dx: -4, dy: 0)), .queued)
+        XCTAssertEqual(outbox.enqueue(.key(code: 29, value: 0)), .queued)
+        XCTAssertEqual(outbox.enqueue(.pointerScroll(horizontal: 0, vertical: 1)), .queued)
+        let expected: [BridgePacket] = [
+            .pointerMotion(dx: 30_000, dy: 0), .pointerMotion(dx: 5_000, dy: 0),
+            .pointerMotion(dx: -3, dy: 0), .pointerButton(button: 0, pressed: true),
+            .pointerMotion(dx: -4, dy: 0), .key(code: 29, value: 0),
+            .pointerScroll(horizontal: 0, vertical: 1)
+        ]
+        XCTAssertEqual(expected.compactMap { _ in outbox.take(generation: 7) }, expected)
+        XCTAssertNil(outbox.take(generation: 7))
+    }
+
+    func testCongestedOutboxAcceptsConcurrentMotionWithoutLosingDeltas() {
+        let outbox = SenderOutbox(capacity: 4)
+        outbox.activate(generation: 3)
+        DispatchQueue.concurrentPerform(iterations: 10_000) { _ in
+            _ = outbox.enqueue(.pointerMotion(dx: 1, dy: 1))
+        }
+        XCTAssertEqual(outbox.take(generation: 3), .pointerMotion(dx: 10_000, dy: 10_000))
+        XCTAssertNil(outbox.take(generation: 3))
+    }
+
+    func testCongestedOutboxFailsClosedAndDiscardsOldGeneration() {
+        let outbox = SenderOutbox(capacity: 2)
+        outbox.activate(generation: 1)
+        XCTAssertEqual(outbox.enqueue(.key(code: 30, value: 1)), .wake(1))
+        XCTAssertEqual(outbox.enqueue(.pointerButton(button: 0, pressed: true)), .queued)
+        XCTAssertEqual(outbox.enqueue(.key(code: 30, value: 0)), .overflow(1))
+        XCTAssertEqual(outbox.enqueue(.pointerButton(button: 0, pressed: false)), .inactive)
+        XCTAssertNil(outbox.take(generation: 1))
+        outbox.activate(generation: 2)
+        XCTAssertEqual(outbox.enqueue(.key(code: 30, value: 0)), .wake(2))
+        XCTAssertNil(outbox.take(generation: 1))
+        XCTAssertEqual(outbox.take(generation: 2), .key(code: 30, value: 0))
+    }
+
     func testPreciseScrollAccumulatesFractionalSteps() {
         var scroll = ScrollDeltaRemainder()
         let first = scroll.append(x: 0.4, y: -0.4)

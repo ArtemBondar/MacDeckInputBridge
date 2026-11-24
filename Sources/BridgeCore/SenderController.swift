@@ -777,10 +777,10 @@ final class ClipboardCapabilityState {
 
 private final class SenderClient {
     private static let maximumReceiveLength = SessionFramer.maximumFrameSize + 4
-    // Allows just over a second of nominal 240 Hz pointer batches while bounding
-    // queued encrypted frames. A stalled connection fails closed so releases
-    // cannot be delayed indefinitely behind an unbounded backlog.
-    private static let maximumPendingFrames = 256
+    // Keep only a small number of frames inside Network.framework so unsent
+    // motion remains coalescible. Other input stays ordered in a bounded queue.
+    private static let maximumInFlightFrames = 8
+    private static let maximumQueuedPackets = 256
 
     private struct Endpoint {
         let host: String
@@ -788,6 +788,7 @@ private final class SenderClient {
     }
 
     private let queue = DispatchQueue(label: "MacDeckInputBridge.transport")
+    private let outbox = SenderOutbox(capacity: SenderClient.maximumQueuedPackets)
     private let pairing: PairingSecret
     private let retryPolicy: ConnectionRetryPolicy
     private let requestPointer: Bool
@@ -828,7 +829,13 @@ private final class SenderClient {
     }
 
     func send(_ packet: BridgePacket) {
-        queue.async { [weak self] in self?.sendApplicationPacket(packet) }
+        switch outbox.enqueue(packet) {
+        case .inactive, .queued: break
+        case let .wake(generation):
+            queue.async { [weak self] in self?.drainOutbox(generation: generation) }
+        case let .overflow(generation):
+            queue.async { [weak self] in self?.failActiveConnection(generation: generation) }
+        }
     }
 
     func requestDeckClipboardCapability() {
@@ -837,7 +844,7 @@ private final class SenderClient {
             self.clipboardCapability.request { [weak self] in
                 self?.onDeckClipboardCapability?(false)
             }
-            self.sendApplicationPacket(.ping)
+            self.send(.ping)
         }
     }
 
@@ -982,30 +989,39 @@ private final class SenderClient {
             throw ProtocolError.invalidFrame
         }
         isReady = true
+        outbox.activate(generation: generation)
         handshakeTimeoutWorkItem?.cancel()
         handshakeTimeoutWorkItem = nil
         onReady?(generation, capabilities)
     }
 
-    private func sendApplicationPacket(_ packet: BridgePacket) {
-        guard isReady, let generation = activeGeneration else { return }
-        do {
-            try sendPacket(packet, generation: generation)
-        } catch {
-            failActiveConnection(generation: generation)
+    private func drainOutbox(generation: UInt64) {
+        guard isReady, activeGeneration == generation else { return }
+        while pendingFrames < Self.maximumInFlightFrames,
+              let packet = outbox.take(generation: generation) {
+            do {
+                try sendPacket(packet, generation: generation)
+            } catch {
+                failActiveConnection(generation: generation)
+                return
+            }
         }
     }
 
     private func sendPacket(_ packet: BridgePacket, generation: UInt64) throws {
         guard activeGeneration == generation, let connection, var session else { throw ProtocolError.invalidFrame }
-        guard pendingFrames < Self.maximumPendingFrames else { throw ProtocolError.invalidFrame }
+        guard pendingFrames < Self.maximumInFlightFrames else { throw ProtocolError.invalidFrame }
         let frame = try session.seal(packet)
         pendingFrames += 1
         self.session = session
         connection.send(content: frame, completion: .contentProcessed { [weak self] error in
             guard let self, self.activeGeneration == generation else { return }
             self.pendingFrames = max(0, self.pendingFrames - 1)
-            if error != nil { self.failActiveConnection(generation: generation) }
+            if error != nil {
+                self.failActiveConnection(generation: generation)
+            } else {
+                self.drainOutbox(generation: generation)
+            }
         })
     }
 
@@ -1079,6 +1095,7 @@ private final class SenderClient {
     }
 
     private func invalidateActiveConnection() {
+        outbox.deactivate()
         clipboardCapability.invalidate()
         handshakeTimeoutWorkItem?.cancel()
         handshakeTimeoutWorkItem = nil
