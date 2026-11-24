@@ -91,7 +91,7 @@ private final class MenuBarModel: ObservableObject {
             self?.message = "Connection was not established. Check the Steam Deck address, pairing secret, and that Mac input is enabled on the Deck."
         }
         sender.pointerUnavailable = { [weak self] in
-            self?.message = "Pointer forwarding is unavailable. Update MacDeck on the Steam Deck, check input permissions, and reconnect. Keyboard forwarding can still be used."
+            self?.message = "Pointer forwarding is unavailable. Allow MacDeck to become active on the Mac, check the Steam Deck app version and input permissions, then reconnect. Keyboard forwarding can still be used."
         }
         sender.layoutSynchronizationWarning = { [weak self] in
             self?.message = "Keyboard-layout change was not confirmed. The Steam Deck kept its previous layout; switch the Mac input source again."
