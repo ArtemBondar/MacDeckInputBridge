@@ -66,20 +66,37 @@ struct PointerEventBuffer {
     private var kind: Kind?
     private var x = 0
     private var y = 0
+    private var sentSinceIdle = false
 
     mutating func appendMotion(x: Int, y: Int) -> BridgePacket? { append(.motion, x: x, y: y) }
     mutating func appendScroll(x: Int, y: Int) -> BridgePacket? { append(.scroll, x: x, y: y) }
 
     private mutating func append(_ next: Kind, x: Int, y: Int) -> BridgePacket? {
-        let prior = kind != nil && kind != next ? drain() : nil
+        let limitedX = max(Int(Int16.min), min(Int(Int16.max), x))
+        let limitedY = max(Int(Int16.min), min(Int(Int16.max), y))
+        let range = Int(Int16.min)...Int(Int16.max)
+        // Flush before an accumulated axis would exceed the wire format,
+        // preserving both packets instead of silently clipping fast movement.
+        let overflows = !range.contains(self.x + limitedX) || !range.contains(self.y + limitedY)
+        let prior = kind != nil && (kind != next || overflows) ? drain() : nil
         kind = next
-        func boundedSum(_ total: Int, _ delta: Int) -> Int {
-            let limited = max(Int(Int16.min), min(Int(Int16.max), delta))
-            return max(Int(Int16.min), min(Int(Int16.max), total + limited))
-        }
-        self.x = boundedSum(self.x, x)
-        self.y = boundedSum(self.y, y)
+        self.x += limitedX
+        self.y += limitedY
         return prior
+    }
+
+    /// An idle stream need not wait for the next timer tick.
+    mutating func drainIfIdle() -> BridgePacket? {
+        guard !sentSinceIdle, let packet = drain() else { return nil }
+        sentSinceIdle = true
+        return packet
+    }
+
+    /// During a burst, at most one coalesced packet is sent per timer tick.
+    mutating func drainForTick() -> BridgePacket? {
+        let packet = drain()
+        sentSinceIdle = packet != nil
+        return packet
     }
 
     mutating func drain() -> BridgePacket? {

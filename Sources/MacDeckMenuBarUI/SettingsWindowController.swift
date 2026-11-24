@@ -255,7 +255,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         clipboardGuidance.textColor = .secondaryLabelColor
         clipboardGuidance.font = .systemFont(ofSize: 12)
         clipboardGuidance.maximumNumberOfLines = 2
-        let pointerGuidance = NSTextField(wrappingLabelWithString: "macOS may still handle system trackpad gestures while pointer forwarding is active.")
+        let pointerGuidance = NSTextField(wrappingLabelWithString: "MacDeck leaves trackpad gestures on the Mac and also sends two-finger scroll events to the Steam Deck.")
         pointerGuidance.textColor = .secondaryLabelColor
         pointerGuidance.font = .systemFont(ofSize: 12)
         let inputSourceTitle = label("Current Mac layout ID", font: .systemFont(ofSize: 13, weight: .medium))

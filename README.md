@@ -128,11 +128,9 @@ scroll direction and sensitivity still require verification on a MacBook and
 Steam Deck; pinch and multi-finger gestures are not included.
 MacDeck needs to become the active Mac application while forwarding the pointer.
 If another Mac application becomes active, forwarding stops and input returns
-to the Mac. The feature is intended to forward two-finger scrolling; pinch and
-system gestures are not forwarded. macOS may still handle system-wide trackpad
-gestures (such as a multi-finger swipe) while the pointer is forwarded.
-They can be turned off in macOS Trackpad settings if you do not want them
-active anywhere.
+to the Mac. MacDeck does not intentionally block trackpad gestures on the Mac.
+Two-finger scroll events are also sent to the Deck; pinch and system gestures
+are not forwarded. Verify gesture behavior on your devices.
 
 ## Clipboard sync (optional)
 

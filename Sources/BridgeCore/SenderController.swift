@@ -33,13 +33,14 @@ public final class SenderController {
     private var pointerActivationGeneration: UInt64 = 0
     private var pointerPreviousApp: NSRunningApplication?
     private var pointerFocusObserver: NSObjectProtocol?
-    private var pointerScrollMonitor: Any?
     private var pointerBuffer = PointerEventBuffer()
     private var scrollRemainder = ScrollDeltaRemainder()
     private var pointerTimer: Timer?
     /// Give macOS a bounded time to notify us that activation completed.
     private static let pointerActivationTimeout: TimeInterval = 1.0
-    private static let pointerBatchInterval: TimeInterval = 1.0 / 120.0
+    /// Target 240 Hz for coalesced motion while sending the first idle event
+    /// immediately. Ordering changes or a full batch may trigger earlier sends.
+    private static let pointerBatchInterval: TimeInterval = 1.0 / 240.0
     private var runLoopSource: CFRunLoopSource?
     private var layoutSyncEnabled = false
     private var clipboardSyncEnabled = false
@@ -78,7 +79,6 @@ public final class SenderController {
     deinit {
         if pointerActive { CGAssociateMouseAndMouseCursorPosition(boolean_t(1)) }
         if let pointerFocusObserver { NSWorkspace.shared.notificationCenter.removeObserver(pointerFocusObserver) }
-        if let pointerScrollMonitor { NSEvent.removeMonitor(pointerScrollMonitor) }
         inputSourceSettlementWorkItem?.cancel()
         clipboardTimer?.invalidate()
         pointerTimer?.invalidate()
@@ -341,14 +341,9 @@ public final class SenderController {
         }
         pointerState.start()
         pointerActive = true
-        pointerScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            guard let self else { return event }
-            return PointerScrollFallback.route(event, forwarding: self.pointerActive) { cgEvent in
-                _ = self.handlePointer(type: .scrollWheel, event: cgEvent)
-            }
-        }
         pointerTimer = Timer.scheduledTimer(withTimeInterval: Self.pointerBatchInterval, repeats: true) { [weak self] _ in
-            self?.flushPointer()
+            guard let self, let packet = self.pointerBuffer.drainForTick() else { return }
+            self.client?.send(packet)
         }
         if let pointerTimer { RunLoop.main.add(pointerTimer, forMode: .common) }
     }
@@ -363,10 +358,6 @@ public final class SenderController {
         pointerTimer?.invalidate()
         pointerTimer = nil
         pointerActive = false
-        if let pointerScrollMonitor {
-            NSEvent.removeMonitor(pointerScrollMonitor)
-            self.pointerScrollMonitor = nil
-        }
         pointerBuffer = PointerEventBuffer()
         scrollRemainder = ScrollDeltaRemainder()
         if let pointerFocusObserver {
@@ -398,6 +389,7 @@ public final class SenderController {
                 x: Int(event.getIntegerValueField(.mouseEventDeltaX)),
                 y: Int(event.getIntegerValueField(.mouseEventDeltaY))
             ) { client?.send(previous) }
+            if let immediate = pointerBuffer.drainIfIdle() { client?.send(immediate) }
             return nil
         case .scrollWheel:
             guard pointerActive else { return Unmanaged.passUnretained(event) }
@@ -412,7 +404,9 @@ public final class SenderController {
                 y = Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis1))
             }
             if let previous = pointerBuffer.appendScroll(x: x, y: y) { client?.send(previous) }
-            return nil
+            if let immediate = pointerBuffer.drainIfIdle() { client?.send(immediate) }
+            // Scrolling is also a Mac gesture; leave its local delivery intact.
+            return Unmanaged.passUnretained(event)
         default: return Unmanaged.passUnretained(event)
         }
         switch pointerState.handle(button: button, pressed: pressed) {
@@ -783,7 +777,7 @@ final class ClipboardCapabilityState {
 
 private final class SenderClient {
     private static let maximumReceiveLength = SessionFramer.maximumFrameSize + 4
-    // Allows more than two seconds of 120 Hz pointer batches while bounding
+    // Allows just over a second of nominal 240 Hz pointer batches while bounding
     // queued encrypted frames. A stalled connection fails closed so releases
     // cannot be delayed indefinitely behind an unbounded backlog.
     private static let maximumPendingFrames = 256
