@@ -139,24 +139,17 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
           REPLACE_EXISTING: ${{ needs.prepare.outputs.replace_existing }}
         run: |
-          cat > notes.md <<EOF
+          if [[ -f "docs/releases/$VERSION.md" ]]; then
+            cp "docs/releases/$VERSION.md" notes.md
+          else
+            cat > notes.md <<EOF
           ## MacDeckInputBridge $VERSION
 
-          ### What's new
-
-          - Store the pairing secret in a private local file by default, with Keychain available as an option. Existing installations retain their storage choice.
-          - Simplified clipboard sharing by hiding the manual send controls; automatic text sharing remains opt-in.
-          - Added About information to both apps, including version and developer details.
-          - Updated the Mac app's visible name to MacDeck and corrected its version metadata.
-
-          ### Installation and compatibility
-
-          - The macOS and Steam Deck apps must be from this same release.
-          - macOS requires Accessibility permission after installation.
-          - The macOS app is ad-hoc signed in this release; notarized distribution is planned for a later release.
-          - If macOS blocks the first launch, open Privacy & Security, choose **Open Anyway**, and confirm **Open**. To open the page directly, run \`open "x-apple.systempreferences:com.apple.preference.security?Privacy"\` in Terminal.
+          - Install the macOS and Steam Deck apps from this same release.
+          - macOS requires Accessibility permission. The Mac app is ad-hoc signed and not notarized.
           - Steam Deck installation and non-root \`/dev/uinput\` setup instructions are included in the archive.
           EOF
+          fi
           if [[ "$REPLACE_EXISTING" == true ]]; then
             git push --force origin "$GITHUB_SHA:refs/tags/$TAG"
             gh release edit "$TAG" --target "$GITHUB_SHA" \
