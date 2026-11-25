@@ -19,16 +19,36 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       pages: write
       id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      PAGES_ARTIFACT: github-pages-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
+          name: ${{ env.PAGES_ARTIFACT }}
+      - name: Wait for the uploaded artifact to be listed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in {1..30}; do
+            count=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '[.artifacts[] | select(.name == env.PAGES_ARTIFACT and .expired == false)] | length')
+            if [[ "$count" == "1" ]]; then
+              exit 0
+            fi
+            echo "Artifact not yet available (attempt $attempt/30)"
+            sleep 2
+          done
+          echo "::error::Pages artifact did not become available"
+          exit 1
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: ${{ env.PAGES_ARTIFACT }}
