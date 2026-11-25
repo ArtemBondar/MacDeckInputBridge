@@ -3,35 +3,51 @@ import XCTest
 
 final class AccessibilityPermissionTests: XCTestCase {
     func testTrustedProcessDoesNotPromptOrOpenSettings() {
-        XCTAssertTrue(AccessibilityPermission.checkAndRequest(
+        var permission = AccessibilityPermission()
+        XCTAssertTrue(permission.checkAndRequest(
             isTrusted: { true },
-            settingsIsRunning: { XCTFail("Should not inspect Settings when already trusted"); return true },
             showPrompt: { XCTFail("Should not prompt"); return false },
             openSettings: { XCTFail("Should not open Settings") }
         ))
     }
 
-    func testOpenSettingsAreReusedOnEveryUntrustedAttempt() {
+    func testInitialRequestRegistersAppEvenWhenSettingsAreAlreadyOpen() {
+        var permission = AccessibilityPermission()
+        var promptCount = 0
         var settingsOpenCount = 0
         for _ in 0..<3 {
-            XCTAssertFalse(AccessibilityPermission.checkAndRequest(
+            XCTAssertFalse(permission.checkAndRequest(
                 isTrusted: { false },
-                settingsIsRunning: { true },
-                showPrompt: { XCTFail("Should not stack a prompt over Settings"); return false },
+                showPrompt: { promptCount += 1; return false },
                 openSettings: { settingsOpenCount += 1 }
             ))
         }
-        XCTAssertEqual(settingsOpenCount, 3)
+        XCTAssertEqual(promptCount, 1)
+        XCTAssertEqual(settingsOpenCount, 2)
     }
 
-    func testInitialRequestStillUsesSystemPromptWhenSettingsAreNotRunning() {
+    func testFreshProcessRequestsAgainAfterResetOrReinstall() {
         var promptCount = 0
-        XCTAssertFalse(AccessibilityPermission.checkAndRequest(
-            isTrusted: { false },
-            settingsIsRunning: { false },
-            showPrompt: { promptCount += 1; return false },
-            openSettings: { XCTFail("The initial system prompt handles navigation") }
-        ))
-        XCTAssertEqual(promptCount, 1)
+        // No persisted "already requested" flag may skip registration on launch.
+        for _ in 0..<2 {
+            var permission = AccessibilityPermission()
+            XCTAssertFalse(permission.checkAndRequest(
+                isTrusted: { false },
+                showPrompt: { promptCount += 1; return false },
+                openSettings: { XCTFail("New process must request registration") }
+            ))
+        }
+        XCTAssertEqual(promptCount, 2)
+    }
+
+    func testRevokedAccessCanBeRequestedAgainAfterTrustWasObserved() {
+        var permission = AccessibilityPermission()
+        var promptCount = 0
+        let request = { promptCount += 1; return false }
+        let unexpectedOpen = { XCTFail("Should request registration after revocation") }
+        XCTAssertFalse(permission.checkAndRequest(isTrusted: { false }, showPrompt: request, openSettings: unexpectedOpen))
+        XCTAssertTrue(permission.checkAndRequest(isTrusted: { true }, showPrompt: request, openSettings: unexpectedOpen))
+        XCTAssertFalse(permission.checkAndRequest(isTrusted: { false }, showPrompt: request, openSettings: unexpectedOpen))
+        XCTAssertEqual(promptCount, 2)
     }
 }
