@@ -1,5 +1,5 @@
 # MacDeck
-   Encrypted Mac keyboard input for Steam Deck Desktop Mode.
+Encrypted Mac keyboard and optional pointer input for Steam Deck Desktop Mode.
 
 [Project website](https://macdeck.artembondar.dev/) · [Download](https://github.com/ArtemBondar/MacDeckInputBridge/releases/latest)
 
@@ -7,7 +7,8 @@
 
 Send a Mac keyboard to a Steam Deck in Desktop Mode over your local network.
 MacDeck captures physical key events on the Mac and creates a virtual keyboard
-on the Deck. The connection is paired, authenticated, and encrypted.
+on the Deck. Optionally send your Mac trackpad or mouse along with the keyboard.
+The connection is paired, authenticated, and encrypted.
 
 Use it only on a trusted network. The pairing secret is a password for your
 keyboard connection; do not share it or expose the Deck receiver to the
@@ -117,20 +118,33 @@ for matching rules and the custom-layout fallback.
 
 ## Pointer forwarding (experimental)
 
-On the Mac, enable **Forward Mac pointer to Steam Deck** in MacDeck Settings.
-After reconnecting, the keyboard shortcut switches the pointer together with
-the keyboard. The option is off by default. If the Deck cannot provide a
-virtual mouse, or it runs an older version, keyboard forwarding remains
-available and the Mac reports that pointer forwarding is unavailable.
+Use your Mac trackpad or mouse to move the Deck cursor, left/right click, drag,
+and scroll in Desktop Mode. Pointer forwarding is off by default.
 
-Pointer forwarding is intended for Desktop Mode. Movement, clicks, dragging,
-scroll direction and sensitivity still require verification on a MacBook and
-Steam Deck; pinch and multi-finger gestures are not included.
-MacDeck needs to become the active Mac application while forwarding the pointer.
-If another Mac application becomes active, forwarding stops and input returns
-to the Mac. MacDeck does not intentionally block trackpad gestures on the Mac.
-Two-finger scroll events are also sent to the Deck; pinch and system gestures
-are not forwarded. Verify gesture behavior on your devices.
+1. Install the Mac and Deck apps from the **same release**, then pair them as
+   described above.
+2. On the Mac, open MacDeck's **Settings**, select **Forward Mac pointer to
+   Steam Deck**, and click **Save**.
+3. Return input to the Mac if it is already being forwarded, then press
+   **Control–Shift–F12** to reconnect. The shortcut now switches the keyboard
+   and pointer together. On some Macs, hold **Fn** as well.
+4. Move and click with your Mac trackpad or mouse. Press the shortcut again to
+   return input to your Mac. To go back to keyboard-only use, clear the option,
+   save, and reconnect.
+
+MacDeck becomes the active Mac application while forwarding the pointer. If
+another Mac application becomes active, forwarding stops and input returns to
+the Mac. A connection failure also returns control to the Mac and releases held
+keys and mouse buttons on the Deck.
+
+Two-finger scrolling is sent to the Deck **and remains available on the Mac**.
+Pinch and macOS system gestures stay on the Mac and are not forwarded. Pointer
+forwarding targets Desktop Mode; Gaming Mode pointer support is not included.
+
+If an older Deck app or an unavailable virtual mouse prevents pointer forwarding,
+MacDeck reports it and keeps keyboard forwarding available. For troubleshooting,
+check that both apps use the same release and the Deck's virtual-input permission
+setup is complete.
 
 ## Clipboard sync (optional)
 
@@ -168,5 +182,6 @@ rm -rf ~/.config/mac-deck-input-bridge
 - Optional clipboard sync is plain UTF-8 text only; it is encrypted in transit
   and clipboard contents are neither logged nor persisted.
 - The receiver runs as your Deck user; it does not run as root.
-- The bridge forwards keyboard input only—no trackpad or Bluetooth support.
+- Keyboard forwarding is enabled by the shortcut; pointer forwarding is optional
+  and off by default. There is no Bluetooth transport or remote video streaming.
 - macOS-reserved shortcuts may remain handled by macOS.

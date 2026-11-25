@@ -68,6 +68,10 @@ input, or UI.
    new user-facing capability, `bugfix/<issue>-<short-name>` for a correction,
    and `chore/<issue>-<short-name>` for tooling, documentation, or refactoring.
    Do not commit directly to `main`.
+9. **Keep user documentation current.** For every major change or new feature,
+   update the website and README in the same PR to describe the resulting
+   behavior. Include setup and usage instructions when relevant, and keep
+   supported modes, defaults, and limitations consistent with the implementation.
 
 ## Code review quality standards
 
