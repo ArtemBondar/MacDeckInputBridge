@@ -72,6 +72,9 @@ input, or UI.
    update the website and README in the same PR to describe the resulting
    behavior. Include setup and usage instructions when relevant, and keep
    supported modes, defaults, and limitations consistent with the implementation.
+10. **Verify website changes with Playwright.** Always use Playwright to test the
+    rendered site after website changes. Check light and dark themes and desktop
+    and mobile layouts when relevant, and record the verification results in the PR.
 
 ## Code review quality standards
 
